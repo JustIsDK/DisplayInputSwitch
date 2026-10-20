@@ -5,14 +5,14 @@ import UniformTypeIdentifiers
 import ServiceManagement
 
 struct Display: Decodable, Identifiable { let id: String; let name: String; let serial: String }
-struct Outcome: Decodable { let serial: String; let ok: Bool; let input: Int?; let videoSent: Bool?; let usbSent: Bool?; let error: String? }
+struct Outcome: Decodable { let serial: String; let ok: Bool; let input: Int?; let videoSent: Bool?; let brightness: Int?; let maxBrightness: Int?; let error: String? }
 struct Reply: Decodable {
     let ok: Bool
     let displays: [Display]?
     let input: Int?
     let rawInput: Int?
-    let usbValue: Int?
-    let usbInventory: Int?
+    let brightness: Int?
+    let maxBrightness: Int?
     let results: [Outcome]?
     let error: String?
 }
@@ -75,6 +75,8 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     @Published var displays: [Display] = []
     @Published var status = "正在检测显示器…"
     @Published var readings: [String: Int] = [:]
+    @Published var levels: [String: Int] = [:]
+    @Published var levelErrors: [String: String] = [:]
     @Published var busy = false
     @Published var log = ""
     @Published var shortcutStatus = ""
@@ -103,7 +105,7 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         }
         shortcutStatus = hotkeys.register(config)
         refreshLoginStatus()
-        record("启动显示器切换 2.2")
+        record("启动显示器切换 2.3")
         Task { await refresh() }
     }
     func refreshLoginStatus() {
@@ -150,11 +152,18 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     func refresh() async {
         guard !busy else { return }; busy = true; defer { busy = false }
         status = "正在检测…"
+        readings.removeAll()
+        levels.removeAll()
+        levelErrors.removeAll()
         do {
             displays = try await runHelper(["list"]).displays ?? []
-            readings.removeAll()
             for m in config.monitors where displays.contains(where: { $0.serial == m.serial }) {
                 if let r = try? await runHelper(["get",m.serial]), let value = r.input { readings[m.serial] = value }
+                do {
+                    let r = try await runHelper(["brightness-get",m.serial])
+                    guard let current = r.brightness, let maximum = r.maxBrightness else { throw ConfigError(message: "亮度响应不完整。") }
+                    levels[m.serial] = try brightnessPercent(current: current, maximum: maximum)
+                } catch { levelErrors[m.serial] = error.localizedDescription }
             }
             status = config.monitors.map { m in
                 "\(m.name)：\(readings[m.serial].map(sourceName) ?? (displays.contains(where: { $0.serial == m.serial }) ? "读取失败" : "当前不可见"))"
@@ -162,21 +171,29 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
             record(status)
         } catch { status = error.localizedDescription; record(status) }
     }
-    func execute(_ operations: [Operation], title: String, warning: String = "") async throws {
+    func execute(_ operations: [Operation], title: String) async throws {
         let json = String(data: try JSONEncoder().encode(operations), encoding: .utf8)!
         let reply = try await runHelper(["batch",json])
         guard let results = reply.results, results.count == operations.count else { throw ConfigError(message: "切换结果不完整；请重新检测。") }
         var lines = [title]
         for r in results {
             let name = config.monitors.first(where: { $0.serial == r.serial })?.name ?? r.serial
-            if let input = r.input { readings[r.serial] = input } else { readings.removeValue(forKey: r.serial) }
+            if operations.first(where: { $0.serial == r.serial })?.input != nil {
+                if let input = r.input { readings[r.serial] = input } else { readings.removeValue(forKey: r.serial) }
+            }
+            if operations.first(where: { $0.serial == r.serial })?.brightness != nil {
+                if let current = r.brightness, let maximum = r.maxBrightness,
+                   let percent = try? brightnessPercent(current: current, maximum: maximum) {
+                    levels[r.serial] = percent
+                    if r.error == nil { lines.append("\(name)：DDC 确认亮度 \(percent)%") }
+                } else { levels.removeValue(forKey: r.serial) }
+                levelErrors[r.serial] = r.error
+            }
             if let error = r.error { lines.append("\(name)：\(error)"); continue }
             if let target = operations.first(where: { $0.serial == r.serial })?.input {
                 lines.append("\(name)：" + (r.input == target ? "DDC 确认 \(sourceName(target))" : r.input.map { "返回 \(sourceName($0))，目标 \(sourceName(target))" } ?? "已发送 \(sourceName(target))，回读不可用"))
             }
-            if r.usbSent == true { lines.append("USB 关联请求已发送，外设归属尚需实际确认") }
         }
-        if !warning.isEmpty { lines.append(warning) }
         status = lines.joined(separator: "\n"); record(status)
     }
     func apply(_ group: SwitchGroup) async {
@@ -184,47 +201,20 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         status = "正在切到 \(group.name)…"
         do {
             try config.validate()
-            var ops = group.displays.map { Operation(serial: $0.serial, input: $0.input) }
-            var warning = ""
-            if group.usb != "keep" {
-                let input: Int
-                if let assigned = group.displays.first(where: { $0.serial == config.usbSerial }) { input = assigned.input }
-                else {
-                    guard let current = try await runHelper(["get",config.usbSerial]).input else { throw ConfigError(message: "无法读取 USB 显示器输入源。") }
-                    input = current
-                }
-                do {
-                    let usb = try usbOperation(config: config, input: input, owner: group.usb)
-                    if let i = ops.firstIndex(where: { $0.serial == config.usbSerial }) {
-                        ops[i].usbMask = usb.usbMask; ops[i].usbBits = usb.usbBits; ops[i].usbInput = usb.usbInput
-                    } else { ops.append(usb) }
-                } catch { warning = "USB 未执行：\(error.localizedDescription) 目标：\(usbName(group.usb))" }
-            }
-            try await execute(ops, title: group.name, warning: warning)
+            let ops = group.displays.map { Operation(serial: $0.serial, input: $0.input) }
+            try await execute(ops, title: group.name)
         } catch { status = error.localizedDescription; record(status) }
     }
-    func switchUSB(_ owner: String) async {
+    func setBrightness(_ serials: [String], percent: Int) async {
         guard !busy else { return }; busy = true; defer { busy = false }
-        status = "正在切换 USB…"
+        status = "正在设置亮度…"
         do {
-            try config.validate()
-            guard let input = try await runHelper(["get",config.usbSerial]).input else { throw ConfigError(message: "无法读取当前输入源。") }
-            let op = try usbOperation(config: config, input: input, owner: owner)
-            try await execute([op], title: "USB → \(usbName(owner))")
-        } catch { status = "USB 未执行：\(error.localizedDescription)"; record(status) }
-    }
-    func captureUSB(_ owner: String) async {
-        guard !busy else { return }; busy = true; defer { busy = false }
-        do {
-            let r = try await runHelper(["usb-read",config.usbSerial])
-            guard let input = r.input, let value = r.usbValue, value >= 0, value < 0xff00 else {
-                throw ConfigError(message: "此固件未返回可用的 USB 关联映射（E7=\(r.usbValue.map(String.init) ?? "无响应")）。暂不能启用独立 USB 控制；没有写入显示器。")
+            guard (0...100).contains(percent), !serials.isEmpty,
+                  Set(serials).count == serials.count,
+                  serials.allSatisfy({ s in config.monitors.contains { $0.serial == s } }) else {
+                throw ConfigError(message: "亮度或目标显示器无效。")
             }
-            if !config.usbProfiles.contains(where: { $0.input == input }) { config.usbProfiles.append(.init(input: input)) }
-            let i = config.usbProfiles.firstIndex(where: { $0.input == input })!
-            if owner == "mac" { config.usbProfiles[i].mac = value } else { config.usbProfiles[i].windows = value }
-            status = "已读取 \(sourceName(input)) 下的 \(usbName(owner)) 关联值：\(value)。请保存配置。"
-            record(status)
+            try await execute(serials.map { Operation(serial: $0, brightness: percent) }, title: "设置亮度 \(percent)%")
         } catch { status = error.localizedDescription; record(status) }
     }
     func importConfig() {
@@ -232,7 +222,7 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         guard p.runModal() == .OK, let url = p.url else { return }
         do {
             let c = try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: url)); try c.validate()
-            config = c; save()
+            config = c; save(); Task { await refresh() }
         } catch { saveStatus = "导入失败：\(error.localizedDescription)" }
     }
     func exportConfig() {
@@ -245,13 +235,33 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     }
 }
 
-struct USBButtons: View {
+struct BrightnessControl: View {
     @ObservedObject var model: SwitchModel
+    let serials: [String]
+    let name: String
+    @State private var value = 0.0
+    private var available: Bool { !serials.isEmpty && serials.allSatisfy { model.levels[$0] != nil } }
+    private func sync() { value = Double(serials.first.flatMap { model.levels[$0] } ?? 0) }
     var body: some View {
-        HStack {
-            Button("USB → Mac") { Task { await model.switchUSB("mac") } }
-            Button("USB → Windows") { Task { await model.switchUSB("windows") } }
-        }.disabled(model.busy)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(name)
+                Spacer()
+                Text(available ? "\(Int(value))%" : "不可用").monospacedDigit().foregroundStyle(.secondary)
+                Button("应用") { Task { await model.setBrightness(serials, percent: Int(value)) } }
+                    .disabled(model.busy || !available)
+            }
+            Slider(value: $value, in: 0...100, step: 1, onEditingChanged: { editing in
+                if !editing { Task { await model.setBrightness(serials, percent: Int(value)) } }
+            }).accessibilityLabel("\(name)亮度")
+                .disabled(model.busy || !available)
+            if serials.count == 1, let serial = serials.first, let error = model.levelErrors[serial] {
+                Text(error).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear { sync() }
+        .onChange(of: model.levels) { _, _ in sync() }
+        .onChange(of: model.busy) { _, busy in if !busy { sync() } }
     }
 }
 struct SwitchView: View {
@@ -292,14 +302,11 @@ struct SwitchView: View {
                                             ForEach([27,15,17], id: \.self) { Text(sourceName($0)).tag($0) }
                                         }
                                     }
-                                    Picker("QX USB 归属", selection: $group.usb) {
-                                        ForEach(["keep","mac","windows"], id: \.self) { Text(usbName($0)).tag($0) }
-                                    }
                                 }.padding(6)
                             }
                         }
                         Button("添加组别") {
-                            model.config.groups.append(.init(id: UUID().uuidString, name: "新组别", displays: model.config.monitors.map { .init(serial: $0.serial, input: 27) }, usb: "keep", shortcut: 0))
+                            model.config.groups.append(.init(id: UUID().uuidString, name: "新组别", displays: model.config.monitors.map { .init(serial: $0.serial, input: 27) }, shortcut: 0))
                         }.disabled(model.config.groups.count >= 9)
                         Toggle("启用全局快捷键（Control + Option + Command + 数字）", isOn: $model.config.shortcutsEnabled)
                         Text(model.shortcutStatus).font(.callout).foregroundStyle(.secondary)
@@ -307,6 +314,24 @@ struct SwitchView: View {
                         Text(model.saveStatus).textSelection(.enabled)
                     }.padding()
                 }.tabItem { Label("组别", systemImage: "square.stack.3d.up") }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        Text("显示器硬件亮度").font(.headline)
+                        Text("拖动滑块，松手后应用。启动和检测只读取亮度，不自动覆盖显示器设置。")
+                            .foregroundStyle(.secondary)
+                        ForEach(model.config.monitors) { m in
+                            BrightnessControl(model: model, serials: [m.serial], name: m.name)
+                        }
+                        if model.config.monitors.count > 1 {
+                            Divider()
+                            BrightnessControl(model: model, serials: model.config.monitors.map(\.serial), name: "所有显示器联动")
+                            Text("联动滑块显示第一台屏幕的数值，应用时将所有屏幕设置为相同比例。")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        Text("无法调节时请检查 HDR 或显示器预设模式；工具不会自动更改 HDR。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }.padding(20)
+                }.tabItem { Label("亮度", systemImage: "sun.max") }
                 VStack(alignment: .leading, spacing: 12) {
                     Text("按显示器序列号识别，两端可共用同一份 JSON 配置。")
                     ForEach(model.config.monitors.indices, id: \.self) { i in
@@ -320,32 +345,12 @@ struct SwitchView: View {
                     Divider()
                     Text("已检测到") .font(.headline)
                     ForEach(model.displays) { d in Text("\(d.name) · \(d.serial.isEmpty ? "无序列号" : d.serial)").textSelection(.enabled) }
-                    Text("更换显示器或自定义序列号：导出 JSON，修改 monitors、groups 中的 serial 以及 usbSerial，再导入。")
+                    Text("更换显示器或自定义序列号：导出 JSON，修改 monitors、groups 中的 serial，再导入。")
                         .foregroundStyle(.secondary)
                     Spacer()
                 }.padding().tabItem { Label("显示器", systemImage: "display.2") }
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("QX USB 外设").font(.headline)
-                    Text("Mac：90W 全功能 USB-C 上行。Windows：独立 USB-C 数据上行（主机端 USB-A）。")
-                    USBButtons(model: model)
-                    Divider()
-                    Text("USB 控制校准").font(.headline)
-                    Text("独立 USB 控制需要显示器提供可读写的 USB 关联映射。对同一视频输入，分别用显示器菜单将 USB 分配给 Mac 和 Windows，再读取对应状态。两个值不同才可启用；工具不发送猜测的 USB 指令。")
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack {
-                        Button("读取 USB 属于 Mac 的状态") { Task { await model.captureUSB("mac") } }
-                        Button("读取 USB 属于 Windows 的状态") { Task { await model.captureUSB("windows") } }
-                    }
-                    ForEach(model.config.usbProfiles, id: \.input) { p in
-                        Text("\(sourceName(p.input))：\(p.mask == nil ? "未完成校准" : "已记录关联差异，待实测")")
-                    }
-                    Button("保存配置") { model.save() }
-                    Text("USB 不支持或未校准时，组别仍切换视频，并明确报告 USB 未执行。USB 归属不能通过输入源回读确认。")
-                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                }.padding().disabled(model.busy).tabItem { Label("USB", systemImage: "cable.connector") }
                 VStack(alignment: .leading) {
-                    Text("DDC 回读确认输入源；画面和 USB 外设是否正常需实际观察。")
+                    Text("DDC 回读确认输入源；画面是否正常需实际观察。")
                     ScrollView { Text(model.log).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                     Button("打开日志文件") { NSWorkspace.shared.activateFileViewerSelecting([model.logURL]) }
                 }.padding().tabItem { Label("日志", systemImage: "doc.text") }
@@ -369,7 +374,11 @@ struct MenuPanel: View {
                     HStack { Text(g.name); Spacer(); if model.config.shortcutsEnabled && g.shortcut != 0 { Text("⌃⌥⌘\(g.shortcut)").foregroundStyle(.secondary) } }.frame(maxWidth: .infinity)
                 }.disabled(model.busy)
             }
-            Divider(); USBButtons(model: model)
+            Divider()
+            ForEach(model.config.monitors) { m in
+                BrightnessControl(model: model, serials: [m.serial], name: m.name)
+            }
+            Divider()
             HStack(alignment: .top) { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).font(.callout).fixedSize(horizontal: false, vertical: true) }
             Divider()
             HStack {

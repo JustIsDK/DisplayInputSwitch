@@ -13,8 +13,7 @@
       ],
       "id" : "mac1",
       "name" : "Mac 1",
-      "shortcut" : 1,
-      "usb" : "mac"
+      "shortcut" : 1
     },
     {
       "displays" : [
@@ -29,8 +28,7 @@
       ],
       "id" : "mac2",
       "name" : "Mac 2",
-      "shortcut" : 2,
-      "usb" : "mac"
+      "shortcut" : 2
     },
     {
       "displays" : [
@@ -45,8 +43,7 @@
       ],
       "id" : "windows",
       "name" : "Windows",
-      "shortcut" : 3,
-      "usb" : "windows"
+      "shortcut" : 3
     }
   ],
   "monitors" : [
@@ -60,17 +57,5 @@
     }
   ],
   "shortcutsEnabled" : true,
-  "usbProfiles" : [
-    {
-      "input" : 15
-    },
-    {
-      "input" : 17
-    },
-    {
-      "input" : 27
-    }
-  ],
-  "usbSerial" : "J80FDH3",
-  "version" : 1
+  "version" : 2
 }

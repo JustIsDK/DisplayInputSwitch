@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
-using System.Text;
 
 namespace DisplayInputSwitch;
 internal sealed class PhysicalMonitor : IDisposable {
@@ -9,7 +8,8 @@ internal sealed class PhysicalMonitor : IDisposable {
     public string Name = "";
     public void Dispose() { if (Handle != IntPtr.Zero) { Ddc.DestroyPhysicalMonitor(Handle); Handle = IntPtr.Zero; } }
 }
-internal sealed record Outcome(string Serial, bool Ok, int? Input, bool UsbSent, string? Error);
+internal sealed record Outcome(string Serial, bool Ok, int? Input, int? Brightness, int? MaxBrightness, string? Error);
+internal sealed record BrightnessReading(string Serial, string Name, int Current, int Maximum);
 internal static class Ddc {
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] internal struct MonitorInfo {
@@ -76,8 +76,11 @@ internal static class Ddc {
         if (matches.Count != 1 || string.IsNullOrEmpty(serial)) throw new Exception($"显示器 {serial} 不可见、缺少 EDID 序列号或匹配不唯一；未发送本组请求。");
         return matches[0];
     }
-    static int Read(PhysicalMonitor m, byte code) {
-        return GetVCPFeatureAndVCPFeatureReply(m.Handle, code, out _, out uint value, out _) && value <= 65535 ? (int)value : -1;
+    static int Read(PhysicalMonitor m, byte code) => Read(m, code, out _);
+    static int Read(PhysicalMonitor m, byte code, out int maximum) {
+        maximum = -1;
+        if (!GetVCPFeatureAndVCPFeatureReply(m.Handle, code, out _, out uint value, out uint max) || value > 65535 || max > 65535) return -1;
+        maximum = (int)max; return (int)value;
     }
     static bool Write(PhysicalMonitor m, byte code, int value) {
         bool first = SetVCPFeature(m.Handle, code, (uint)value);
@@ -90,38 +93,42 @@ internal static class Ddc {
         try { return monitors.Select(m => { int v = Read(m, 0x60); return (m.Serial, m.Name, v < 0 ? (int?)null : v & 255); }).ToList(); }
         finally { monitors.ForEach(m => m.Dispose()); }
     }
-    public static (int Input, int Value) ReadUsb(string serial) {
+    public static List<BrightnessReading> InspectBrightness() {
         var monitors = Open();
-        try {
-            var m = Find(monitors, serial); int input = Read(m, 0x60), value = Read(m, 0xe7);
-            if (input < 0) throw new Exception("无法读取 USB 显示器当前输入源。");
-            return (input & 255, value);
-        } finally { monitors.ForEach(m => m.Dispose()); }
+        try { return monitors.Select(m => { int v = Read(m, 0x10, out int max); return new BrightnessReading(m.Serial, m.Name, v, max); }).ToList(); }
+        finally { monitors.ForEach(m => m.Dispose()); }
     }
     public static List<Outcome> Apply(List<Operation> ops) {
-        if (ops.Count is < 1 or > 8 || ops.Select(o => o.Serial).Distinct().Count() != ops.Count) throw new Exception("无效的切换计划。");
+        Operation.Validate(ops);
         var monitors = Open();
         try {
             var plan = ops.Select(o => (Op: o, Monitor: Find(monitors, o.Serial))).ToList();
-            var usbValues = new Dictionary<string, int>();
+            var targets = new Dictionary<string, int>();
             foreach (var (o, m) in plan) {
-                if (o.Input is int target && !Configuration.IsSource(target)) throw new Exception("输入源无效。");
-                if (o.UsbMask is int mask) {
-                    int current = Read(m, 0xe7), input = Read(m, 0x60);
-                    if (mask is <= 0 or > 65535 || o.UsbBits is not int bits || bits < 0 || (bits & ~mask) != 0 || current is < 0 or >= 0xff00 || input < 0 || (o.Input ?? (input & 255)) != o.UsbInput) throw new Exception("USB 校准与当前输入不匹配；本组未发送。");
-                    int value = (current & ~mask) | bits;
-                    if (value >= 0xff00) throw new Exception("USB 关联值不能是动作码；本组未发送。");
-                    usbValues[o.Serial] = value;
-                }
+                if (o.Brightness is int percent) {
+                    int current = Read(m, 0x10, out int maximum);
+                    _ = Brightness.Percent(current, maximum); // Preflight every brightness target before any write.
+                    targets[o.Serial] = Brightness.Raw(percent, maximum);
+                } else targets[o.Serial] = o.Input!.Value;
             }
             var errors = new Dictionary<string, string>();
-            foreach (var (o,m) in plan) if (o.Input is int target && !Write(m, 0x60, target)) errors[o.Serial] = "DDC 发送失败，可能部分执行。";
-            var usbSent = new HashSet<string>();
-            foreach (var (o,m) in plan) if (usbValues.TryGetValue(o.Serial, out int value) && !errors.ContainsKey(o.Serial)) {
-                if (Write(m, 0xe7, value)) usbSent.Add(o.Serial); else errors[o.Serial] = "USB 请求发送失败，视频可能已切换。";
-            }
+            foreach (var (o,m) in plan) if (!Write(m, o.Brightness != null ? (byte)0x10 : (byte)0x60, targets[o.Serial])) errors[o.Serial] = "DDC 发送失败，可能部分执行；请检测后重试。";
             Thread.Sleep(600);
-            return plan.Select(p => { int input = Read(p.Monitor, 0x60); errors.TryGetValue(p.Op.Serial, out string? error); return new Outcome(p.Op.Serial, error == null, input < 0 ? null : input & 255, usbSent.Contains(p.Op.Serial), error); }).ToList();
+            var outcomes = new List<Outcome>();
+            foreach (var (o,m) in plan) {
+                bool brightness = o.Brightness != null;
+                int current = Read(m, brightness ? (byte)0x10 : (byte)0x60, out int maximum);
+                errors.TryGetValue(o.Serial, out string? error);
+                int? validBrightness = null, validMaximum = null;
+                if (brightness) {
+                    if (current >= 0 && maximum > 0 && current <= maximum) {
+                        validBrightness = current; validMaximum = maximum;
+                        if (current != targets[o.Serial]) error ??= "亮度回读未达到目标；请检查 HDR、预设模式或其他控制工具。";
+                    } else error ??= "亮度请求已发送，但无法读取确认。";
+                }
+                outcomes.Add(new Outcome(o.Serial, error == null, !brightness && current >= 0 ? current & 255 : null, validBrightness, validMaximum, error));
+            }
+            return outcomes;
         } finally { monitors.ForEach(m => m.Dispose()); }
     }
 }
