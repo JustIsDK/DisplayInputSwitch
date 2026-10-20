@@ -272,7 +272,7 @@ struct SwitchView: View {
                             Button("打开系统登录项设置…") { SMAppService.openSystemSettingsLoginItems() }
                         }
                     }
-                }.formStyle(.grouped).tabItem { Text("通用") }
+                }.formStyle(.grouped).tabItem { Label("通用", systemImage: "gearshape") }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         ForEach($model.config.groups) { $group in
@@ -306,7 +306,7 @@ struct SwitchView: View {
                         HStack { Button("保存配置") { model.save() }; Button("导入 JSON…") { model.importConfig() }; Button("导出 JSON…") { model.exportConfig() } }
                         Text(model.saveStatus).textSelection(.enabled)
                     }.padding()
-                }.tabItem { Text("组别") }
+                }.tabItem { Label("组别", systemImage: "square.stack.3d.up") }
                 VStack(alignment: .leading, spacing: 12) {
                     Text("按显示器序列号识别，两端可共用同一份 JSON 配置。")
                     ForEach(model.config.monitors.indices, id: \.self) { i in
@@ -323,7 +323,7 @@ struct SwitchView: View {
                     Text("更换显示器或自定义序列号：导出 JSON，修改 monitors、groups 中的 serial 以及 usbSerial，再导入。")
                         .foregroundStyle(.secondary)
                     Spacer()
-                }.padding().tabItem { Text("显示器") }
+                }.padding().tabItem { Label("显示器", systemImage: "display.2") }
                 VStack(alignment: .leading, spacing: 14) {
                     Text("QX USB 外设").font(.headline)
                     Text("Mac：90W 全功能 USB-C 上行。Windows：独立 USB-C 数据上行（主机端 USB-A）。")
@@ -343,12 +343,12 @@ struct SwitchView: View {
                     Text("USB 不支持或未校准时，组别仍切换视频，并明确报告 USB 未执行。USB 归属不能通过输入源回读确认。")
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                }.padding().disabled(model.busy).tabItem { Text("USB") }
+                }.padding().disabled(model.busy).tabItem { Label("USB", systemImage: "cable.connector") }
                 VStack(alignment: .leading) {
                     Text("DDC 回读确认输入源；画面和 USB 外设是否正常需实际观察。")
                     ScrollView { Text(model.log).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                     Button("打开日志文件") { NSWorkspace.shared.activateFileViewerSelecting([model.logURL]) }
-                }.padding().tabItem { Text("日志") }
+                }.padding().tabItem { Label("日志", systemImage: "doc.text") }
             }.disabled(model.busy)
             HStack(alignment: .top) { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                 .padding(10).background(.quaternary).clipShape(RoundedRectangle(cornerRadius: 6))
