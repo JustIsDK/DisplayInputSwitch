@@ -1,6 +1,6 @@
 # 显示器切换 / DisplayInputSwitch
 
-macOS 菜单栏、Windows 托盘工具。通过 DDC/CI 切换多台显示器的输入源，支持可编辑组别、硬件亮度调节、全局快捷键、配置导入导出和本地日志。
+macOS 菜单栏、Windows 托盘工具。通过 DDC/CI 切换多台显示器的输入源，支持可编辑组别、亮度调节、全局快捷键、配置导入导出和本地日志。
 
 ## 默认组别
 
@@ -22,11 +22,14 @@ macOS 菜单栏、Windows 托盘工具。通过 DDC/CI 切换多台显示器的�
 
 ### 亮度调节
 
-“设置与日志 → 亮度”支持每屏独立调节和所有显示器联动；macOS 菜单栏面板也提供每屏滑块。拖动松手后应用，或调整后点击“应用”。启动、检测和切换输入源均不会自动覆盖亮度。
+“设置与日志 → 亮度”下提供两个二级页签，默认选择 **软件调暗 · HDR**。两种方式都支持每屏独立和所有显示器联动；macOS 菜单栏面板也提供每屏滑块。拖动松手后应用，或调整后点击“应用”。
 
-使用 DDC/CI VCP `0x10` 调整显示器硬件亮度，按显示器返回的最大值换算为 0–100%。联动将所有屏幕设置为相同比例，滑块初始显示第一台屏幕的值；相同比例不保证不同屏幕的实际光亮一致。
+- **软件调暗 · HDR**：移植并适配 MonitorControl 的点击穿透黑色遮罩方案。保留 HDR，不修改背光或伽马表；100% 表示撤掉本工具的调暗效果，最低 10%，避免全黑。支持一键恢复，切换到硬件页、导入配置或退出时撤掉遮罩。每次启动从 100% 开始，不自动恢复上次调暗值。只记住本机选择的调光方式，不写入共享组别 JSON。
+- **硬件调光 · SDR**：通过 DDC/CI VCP `0x10` 调节背光，按显示器返回的最大值换算为 0–100%。发送后回读寄存器；**这两台 Dell 在 HDR 开启时出现寄存器变化、实际画面不变，已由使用者确认**。因此 HDR 下请使用软件页。工具不会自动关闭 HDR，也不在启动时写入背光。
 
-发送后回读确认，失败时显示错误及实际可读值，不把滑块目标值当成成功结果。无法读取有效亮度的屏幕不可调节。HDR、显示器预设模式、转接器或其他控制工具可能限制调光；软件不会自动更改 HDR。
+联动将所有屏幕设为相同比例，滑块初始显示第一台屏幕的值；相同比例不代表不同屏幕的实际光亮一致。软件模式通过操作系统桌面坐标映射目标，不要求 DDC 调光可用；目标缺失或身份不唯一时整组不应用。显示器移除后撤掉其遮罩，布局变化时更新覆盖区域。
+
+软件调暗只影响当前主机画面；不会提高显示器背光亮度。与 MonitorControl、夜间调色等软件同时运行时，调暗效果会叠加，本工具不会改写其他工具设置。独占全屏、受保护视频、系统安全界面可能绕过普通桌面遮罩；HDR 高光与 SDR 界面的观感比例也不保证保持一致。
 
 当前 QX 固件没有提供已验证可用的 USB 控制接口，因此已移除 USB 归属、校准和独立切换功能。USB-C 视频输入保留。音频输出选择和音量控制暂未实现。
 
@@ -54,9 +57,9 @@ dotnet publish Windows/DisplayInputSwitch.csproj -c Release -r win-x64 --self-co
 
 也可在 macOS 交叉构建 Windows 版本：`DOTNET_BIN=/path/to/dotnet zsh build-windows.sh`。输出 `build/windows-x64/DisplayInputSwitch.exe`。构建产物、本地 SDK、日志和 IDE 生成目录不入 Git。
 
-已验证：Swift / .NET 配置校验与往返序列化、旧配置迁移、亮度范围和比例换算、无效控制计划拒绝、DDC 报文及响应校验、EDID 序列号解析、Windows 启动命令路径引用、macOS 应用编译和 Windows x64 发布。当前两台 Dell 的 macOS DDC 亮度读取、单屏及双屏联动写入、回读和恢复原值已实测；缺失目标时整组不发送已验证。DDC 回读确认寄存器值，视觉效果仍需实际观察。
+已验证：Swift / .NET 配置校验与往返序列化、旧配置迁移、亮度范围和比例换算、无效控制计划拒绝、DDC 报文及响应校验、EDID 序列号解析、Windows 启动命令路径引用、macOS 应用编译和 Windows x64 发布。当前两台 Dell 的 macOS DDC 寄存器读写和回读已验证，但 HDR 下物理亮度不变。软件遮罩已用双屏白色测试窗口和屏幕像素采样验证实际变暗及 100% 恢复；单屏、联动、缺失目标整组拒绝已验证。
 
-未验证：Windows GUI / DXVA2 实机、HDR 开启时的亮度控制、此次新版完整双屏输入源切换。原先切换后黑屏且 OSD 不显示的问题，在显示器恢复出厂设置后已由使用者确认消失。开机启动已验证系统注册状态，未重启或注销测试。
+未验证：Windows GUI / DXVA2 / 软件遮罩实机、HDR 视频和独占全屏、此次新版完整双屏输入源切换。原先切换后黑屏且 OSD 不显示的问题，在显示器恢复出厂设置后已由使用者确认消失。开机启动已验证系统注册状态，未重启或注销测试。
 
 ## 配置与日志
 
@@ -87,3 +90,12 @@ helper="build/显示器切换.app/Contents/Resources/input-ddc"
 ## 第三方代码
 
 macOS 显示器枚举和通道匹配来自 MIT 项目 [m1ddc](https://github.com/waydabber/m1ddc)，固定提交 `04d949794102eb8df01ad3681afff6464a3eede2`，许可在 [vendor/m1ddc/LICENSE](vendor/m1ddc/LICENSE)。仅链接其 `ioregistry.m`。macOS 控制通道使用私有系统接口，系统升级可能影响兼容性。
+
+MonitorControl 遮罩调暗实现基于 [MonitorControl](https://github.com/MonitorControl/MonitorControl) 的 `DisplayManager.swift`，固定提交 `7cfe64500d19cbbcbf82121a91c826f658a403bd`，MIT 许可见 [vendor/MonitorControl/LICENSE](vendor/MonitorControl/LICENSE)。macOS 使用 AppKit，Windows 移植为不激活、鼠标穿透的分层窗口。此集成仅覆盖本工具的亮度调节，不包含 MonitorControl 的音量、对比度、媒体键或整套设置界面。许可随两端安装包分发，无须额外运行 MonitorControl。
+
+可选 macOS 视觉烟雾测试（会短暂显示白色测试块、调暗再恢复）：
+
+```sh
+xcrun swiftc Sources/Configuration.swift Sources/SoftwareDimming.swift Tests/SoftwareDimming/main.swift -o build/software-dimming-check
+build/software-dimming-check
+```

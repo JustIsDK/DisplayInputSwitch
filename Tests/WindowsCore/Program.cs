@@ -43,3 +43,5 @@ foreach (string path in new[] { "", "bad\"path", "bad\npath", "bad\0path" }) {
     throw new Exception("Invalid startup path accepted");
 }
 Console.WriteLine("Windows core checks passed: shared config, validation, legacy migration, brightness validation, EDID serial and startup command quoting");
+Check(Dimming.Opacity(100) == 0 && Dimming.Opacity(10) == 0.9);
+foreach (int value in new[] { -1, 0, 9, 101 }) MustReject(() => Dimming.Opacity(value));

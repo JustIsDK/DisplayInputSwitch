@@ -76,6 +76,9 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     @Published var status = "正在检测显示器…"
     @Published var readings: [String: Int] = [:]
     @Published var levels: [String: Int] = [:]
+    @Published var softwareDimming = UserDefaults.standard.object(forKey: "softwareDimming") as? Bool ?? true
+    private let dimming = SoftwareDimming()
+    private var observers: [NSObjectProtocol] = []
     @Published var levelErrors: [String: String] = [:]
     @Published var busy = false
     @Published var log = ""
@@ -105,7 +108,16 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         }
         shortcutStatus = hotkeys.register(config)
         refreshLoginStatus()
-        record("启动显示器切换 2.3")
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.dimming.reconcile()
+                if self?.softwareDimming == true { self?.updateSoftwareLevels() }
+            }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dimming.reset() }
+        })
+        record("启动显示器切换 2.4")
         Task { await refresh() }
     }
     func refreshLoginStatus() {
@@ -159,17 +171,39 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
             displays = try await runHelper(["list"]).displays ?? []
             for m in config.monitors where displays.contains(where: { $0.serial == m.serial }) {
                 if let r = try? await runHelper(["get",m.serial]), let value = r.input { readings[m.serial] = value }
-                do {
+                if !softwareDimming { do {
                     let r = try await runHelper(["brightness-get",m.serial])
                     guard let current = r.brightness, let maximum = r.maxBrightness else { throw ConfigError(message: "亮度响应不完整。") }
                     levels[m.serial] = try brightnessPercent(current: current, maximum: maximum)
-                } catch { levelErrors[m.serial] = error.localizedDescription }
+                } catch { levelErrors[m.serial] = error.localizedDescription } }
             }
+            if softwareDimming { updateSoftwareLevels() }
             status = config.monitors.map { m in
                 "\(m.name)：\(readings[m.serial].map(sourceName) ?? (displays.contains(where: { $0.serial == m.serial }) ? "读取失败" : "当前不可见"))"
             }.joined(separator: "；")
             record(status)
         } catch { status = error.localizedDescription; record(status) }
+    }
+    func updateSoftwareLevels() {
+        levels.removeAll(); levelErrors.removeAll()
+        for m in config.monitors {
+            let matches = displays.filter { $0.serial == m.serial && dimming.available($0.id) }
+            if matches.count == 1 { levels[m.serial] = dimming.levels[matches[0].id] ?? 100 }
+            else { levelErrors[m.serial] = "显示器当前不可见或匹配不唯一" }
+        }
+    }
+    func selectBrightnessMode(_ software: Bool) {
+        guard !busy, softwareDimming != software else { return }
+        dimming.reset()
+        softwareDimming = software
+        UserDefaults.standard.set(software, forKey: "softwareDimming")
+        levels.removeAll(); levelErrors.removeAll()
+        Task { await refresh() }
+    }
+    func resetSoftwareDimming() {
+        dimming.reset()
+        if softwareDimming { updateSoftwareLevels() }
+        status = "已恢复原画面（取消本工具的软件调暗）"; record(status)
     }
     func execute(_ operations: [Operation], title: String) async throws {
         let json = String(data: try JSONEncoder().encode(operations), encoding: .utf8)!
@@ -214,7 +248,18 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
                   serials.allSatisfy({ s in config.monitors.contains { $0.serial == s } }) else {
                 throw ConfigError(message: "亮度或目标显示器无效。")
             }
-            try await execute(serials.map { Operation(serial: $0, brightness: percent) }, title: "设置亮度 \(percent)%")
+            if softwareDimming {
+                let ids = try serials.map { serial -> String in
+                    let matches = displays.filter { $0.serial == serial }
+                    guard matches.count == 1 else { throw ConfigError(message: "显示器不可见或匹配不唯一；本组未调暗。") }
+                    return matches[0].id
+                }
+                try dimming.apply(ids, percent: percent)
+                updateSoftwareLevels()
+                status = "软件亮度 \(percent)%（100% 为原画面，HDR 保持开启）"; record(status)
+            } else {
+                try await execute(serials.map { Operation(serial: $0, brightness: percent) }, title: "设置硬件亮度 \(percent)%")
+            }
         } catch { status = error.localizedDescription; record(status) }
     }
     func importConfig() {
@@ -222,7 +267,7 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         guard p.runModal() == .OK, let url = p.url else { return }
         do {
             let c = try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: url)); try c.validate()
-            config = c; save(); Task { await refresh() }
+            dimming.reset(); config = c; save(); Task { await refresh() }
         } catch { saveStatus = "导入失败：\(error.localizedDescription)" }
     }
     func exportConfig() {
@@ -241,7 +286,7 @@ struct BrightnessControl: View {
     let name: String
     @State private var value = 0.0
     private var available: Bool { !serials.isEmpty && serials.allSatisfy { model.levels[$0] != nil } }
-    private func sync() { value = Double(serials.first.flatMap { model.levels[$0] } ?? 0) }
+    private func sync() { value = Double(serials.first.flatMap { model.levels[$0] } ?? (model.softwareDimming ? 100 : 0)) }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -251,7 +296,7 @@ struct BrightnessControl: View {
                 Button("应用") { Task { await model.setBrightness(serials, percent: Int(value)) } }
                     .disabled(model.busy || !available)
             }
-            Slider(value: $value, in: 0...100, step: 1, onEditingChanged: { editing in
+            Slider(value: $value, in: (model.softwareDimming ? 10.0 : 0.0)...100, step: 1, onEditingChanged: { editing in
                 if !editing { Task { await model.setBrightness(serials, percent: Int(value)) } }
             }).accessibilityLabel("\(name)亮度")
                 .disabled(model.busy || !available)
@@ -260,8 +305,36 @@ struct BrightnessControl: View {
             }
         }
         .onAppear { sync() }
+        .onChange(of: model.softwareDimming) { _, _ in sync() }
         .onChange(of: model.levels) { _, _ in sync() }
         .onChange(of: model.busy) { _, busy in if !busy { sync() } }
+    }
+}
+struct BrightnessPage: View {
+    @ObservedObject var model: SwitchModel
+    let software: Bool
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text(software ? "保留 HDR，调暗当前画面" : "显示器硬件亮度").font(.headline)
+                Text(software ? "100% 为原画面，最低 10%。通过透明遮罩调暗，不更改 HDR、背光或其他软件的伽马设置。启动时不自动调暗，退出后恢复。" : "适用于关闭 HDR 的显示器。HDR 下即使 DDC 数值变化，画面也可能不变。拖动松手后应用，也可点击“应用”。")
+                    .foregroundStyle(.secondary)
+                if software {
+                    Button("恢复所有屏幕到 100%") { model.resetSoftwareDimming() }
+                }
+                ForEach(model.config.monitors) { m in
+                    BrightnessControl(model: model, serials: [m.serial], name: m.name)
+                }
+                if model.config.monitors.count > 1 {
+                    Divider()
+                    BrightnessControl(model: model, serials: model.config.monitors.map(\.serial), name: "所有显示器联动")
+                    Text("联动滑块显示第一台屏幕的数值，应用时将所有屏幕设置为相同比例。")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Text(software ? "软件调暗基于 MonitorControl 的开源遮罩方案。同类工具的调暗效果会叠加。独占全屏、受保护视频或系统安全界面可能不受遮罩影响。" : "启动和检测只读取，不自动修改亮度。切回软件调暗不会还原手动修改的显示器背光。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(20)
+        }
     }
 }
 struct SwitchView: View {
@@ -314,23 +387,12 @@ struct SwitchView: View {
                         Text(model.saveStatus).textSelection(.enabled)
                     }.padding()
                 }.tabItem { Label("组别", systemImage: "square.stack.3d.up") }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        Text("显示器硬件亮度").font(.headline)
-                        Text("拖动滑块，松手后应用。启动和检测只读取亮度，不自动覆盖显示器设置。")
-                            .foregroundStyle(.secondary)
-                        ForEach(model.config.monitors) { m in
-                            BrightnessControl(model: model, serials: [m.serial], name: m.name)
-                        }
-                        if model.config.monitors.count > 1 {
-                            Divider()
-                            BrightnessControl(model: model, serials: model.config.monitors.map(\.serial), name: "所有显示器联动")
-                            Text("联动滑块显示第一台屏幕的数值，应用时将所有屏幕设置为相同比例。")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                        Text("无法调节时请检查 HDR 或显示器预设模式；工具不会自动更改 HDR。")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }.padding(20)
+                VStack(spacing: 0) {
+                    Picker("调光方式", selection: Binding(get: { model.softwareDimming }, set: { model.selectBrightnessMode($0) })) {
+                        Text("软件调暗 · HDR").tag(true)
+                        Text("硬件调光 · SDR").tag(false)
+                    }.pickerStyle(.segmented).padding(.horizontal, 20).padding(.top, 16)
+                    BrightnessPage(model: model, software: model.softwareDimming)
                 }.tabItem { Label("亮度", systemImage: "sun.max") }
                 VStack(alignment: .leading, spacing: 12) {
                     Text("按显示器序列号识别，两端可共用同一份 JSON 配置。")
@@ -375,8 +437,12 @@ struct MenuPanel: View {
                 }.disabled(model.busy)
             }
             Divider()
+            Text(model.softwareDimming ? "软件亮度 · HDR" : "硬件亮度 · SDR").font(.caption).foregroundStyle(.secondary)
             ForEach(model.config.monitors) { m in
                 BrightnessControl(model: model, serials: [m.serial], name: m.name)
+            }
+            if model.softwareDimming {
+                Button("恢复原画面（100%）") { model.resetSoftwareDimming() }
             }
             Divider()
             HStack(alignment: .top) { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).font(.callout).fixedSize(horizontal: false, vertical: true) }

@@ -10,6 +10,7 @@ internal sealed class PhysicalMonitor : IDisposable {
 }
 internal sealed record Outcome(string Serial, bool Ok, int? Input, int? Brightness, int? MaxBrightness, string? Error);
 internal sealed record BrightnessReading(string Serial, string Name, int Current, int Maximum);
+internal sealed record Desktop(string Serial, Rectangle Bounds);
 internal static class Ddc {
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] internal struct MonitorInfo {
@@ -42,6 +43,29 @@ internal static class Ddc {
         if (parts.Length < 3 || !parts[0].EndsWith("DISPLAY", StringComparison.OrdinalIgnoreCase)) return "";
         using var key = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Enum\DISPLAY\{parts[1]}\{parts[2]}\Device Parameters");
         return key?.GetValue("EDID") is byte[] edid ? Edid.Serial(edid) : "";
+    }
+    // Software dimming needs EDID identity and desktop bounds, without opening DDC handles.
+    public static List<Desktop> Desktops() {
+        var result = new List<Desktop>();
+        Exception? error = null;
+        bool success = EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr h, IntPtr dc, ref Rect rect, IntPtr data) => {
+            try {
+                var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>(), Device = "" };
+                if (!GetMonitorInfo(h, ref info)) return true;
+                var serials = new List<string>();
+                for (uint i = 0; i < 16; i++) {
+                    var d = new DisplayDevice { Size = Marshal.SizeOf<DisplayDevice>(), Name = "", Description = "", Id = "", Key = "" };
+                    if (!EnumDisplayDevices(info.Device, i, ref d, 1)) break;
+                    if ((d.Flags & 1) != 0) serials.Add(Serial(d.Id));
+                }
+                if (serials.Count == 1 && !string.IsNullOrEmpty(serials[0]))
+                    result.Add(new Desktop(serials[0], Rectangle.FromLTRB(info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom)));
+                return true;
+            } catch (Exception e) { error = e; return false; }
+        }, IntPtr.Zero);
+        if (error != null) throw error;
+        if (!success) throw new Exception("无法读取桌面显示器。");
+        return result;
     }
     public static List<PhysicalMonitor> Open() {
         var result = new List<PhysicalMonitor>();

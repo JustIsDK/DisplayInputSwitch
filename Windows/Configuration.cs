@@ -68,3 +68,9 @@ public static class Brightness {
         return (percent * maximum + 50) / 100;
     }
 }
+public static class Dimming {
+    public static double Opacity(int percent) {
+        if (percent is < 10 or > 100) throw new ArgumentOutOfRangeException(nameof(percent), "软件亮度须为 10–100%。");
+        return (100 - percent) / 100.0;
+    }
+}

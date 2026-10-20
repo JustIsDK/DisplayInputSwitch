@@ -11,11 +11,12 @@ xcrun clang -arch arm64 -fmodules -fmodules-cache-path="$PWD/build/module-cache"
   -o "$app/Contents/Resources/input-ddc"
 
 xcrun swiftc -parse-as-library -O -module-cache-path "$PWD/build/module-cache" \
-  -target arm64-apple-macosx14.0 Sources/Configuration.swift Sources/DisplayInputSwitch.swift \
+  -target arm64-apple-macosx14.0 Sources/Configuration.swift Sources/SoftwareDimming.swift Sources/DisplayInputSwitch.swift \
   -o "$app/Contents/MacOS/DisplayInputSwitch"
 
 cp Info.plist "$app/Contents/Info.plist"
 cp vendor/m1ddc/LICENSE "$app/Contents/Resources/m1ddc-LICENSE.txt"
+cp vendor/MonitorControl/LICENSE "$app/Contents/Resources/MonitorControl-LICENSE.txt"
 codesign --force --sign - "$app/Contents/Resources/input-ddc"
 codesign --force --sign - "$app"
 "$app/Contents/Resources/input-ddc" --self-test

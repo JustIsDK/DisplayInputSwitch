@@ -67,3 +67,7 @@ func brightnessPercent(current: Int, maximum: Int) throws -> Int {
     }
     return Int((Double(current) * 100 / Double(maximum)).rounded())
 }
+func softwareOpacity(percent: Int) throws -> Double {
+    guard (10...100).contains(percent) else { throw ConfigError(message: "软件亮度须为 10–100%。") }
+    return Double(100 - percent) / 100
+}

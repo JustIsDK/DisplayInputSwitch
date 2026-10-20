@@ -39,5 +39,8 @@ for (current, maximum) in [(-1,100),(101,100),(0,0),(0,65536)] {
 let operation = try JSONSerialization.jsonObject(with: JSONEncoder().encode(Operation(serial: "test", brightness: 35))) as! [String: Any]
 assert(operation["input"] == nil && operation["brightness"] as? Int == 35)
 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+let full = try softwareOpacity(percent: 100), minimum = try softwareOpacity(percent: 10)
+assert(full == 0 && minimum == 0.9)
+for value in [-1, 0, 9, 101] { mustReject { _ = try softwareOpacity(percent: value) } }
 try encoder.encode(c).write(to: URL(fileURLWithPath: "Shared/default.json"))
 print("Core checks passed: config validation, legacy migration, brightness normalization and operation encoding")

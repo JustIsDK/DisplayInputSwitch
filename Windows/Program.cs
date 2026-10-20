@@ -28,7 +28,11 @@ internal sealed class SwitchForm : Form {
     readonly CheckBox launchAtLogin = new() { Text = "开机启动", AutoSize = true };
     readonly Label loginStatus = new() { AutoSize = true, MaximumSize = new Size(700, 0) };
     readonly TabControl tabs = new() { Dock = DockStyle.Fill };
-    readonly FlowLayoutPanel brightnessPanel = Flow();
+    readonly FlowLayoutPanel softwarePanel = Flow(), hardwarePanel = Flow();
+    readonly TabControl brightnessTabs = new() { Dock = DockStyle.Fill };
+    readonly SoftwareDimming dimming = new();
+    bool softwareDimming = (string?)Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\DisplayInputSwitch", "BrightnessMode", "software") != "hardware";
+    FlowLayoutPanel brightnessPanel => softwareDimming ? softwarePanel : hardwarePanel;
     readonly Dictionary<string, int> levels = [];
     readonly Dictionary<string, string> levelErrors = [];
     readonly List<(string[] Serials, TrackBar Slider, Label Value, Button Apply)> brightnessControls = [];
@@ -84,7 +88,18 @@ internal sealed class SwitchForm : Form {
         groupActions.Controls.Add(saved);
         groupsPage.Controls.Add(groupActions); groupsPage.Controls.Add(grid); tabs.TabPages.Add(groupsPage);
         var brightnessPage = new TabPage("亮度") { Padding = new Padding(12) };
-        brightnessPage.Controls.Add(brightnessPanel); tabs.TabPages.Add(brightnessPage);
+        var softwarePage = new TabPage("软件调暗 · HDR"); softwarePage.Controls.Add(softwarePanel);
+        var hardwarePage = new TabPage("硬件调光 · SDR"); hardwarePage.Controls.Add(hardwarePanel);
+        brightnessTabs.TabPages.Add(softwarePage); brightnessTabs.TabPages.Add(hardwarePage);
+        brightnessTabs.SelectedIndex = softwareDimming ? 0 : 1;
+        brightnessPage.Controls.Add(brightnessTabs); tabs.TabPages.Add(brightnessPage);
+        brightnessTabs.SelectedIndexChanged += (_, _) => {
+            dimming.Reset(); softwareDimming = brightnessTabs.SelectedIndex == 0;
+            levels.Clear(); levelErrors.Clear(); BuildBrightnessControls();
+            try { Microsoft.Win32.Registry.SetValue(@"HKEY_CURRENT_USER\Software\DisplayInputSwitch", "BrightnessMode", softwareDimming ? "software" : "hardware"); }
+            catch (Exception e) { SetStatus("无法保存调光方式：" + e.Message); }
+            _ = Run(LoadBrightness);
+        };
         BuildBrightnessControls();
         var monitorPage = new TabPage("显示器") { Padding = new Padding(12) };
         var monitors = Flow(); monitors.Controls.Add(Button("检测 / 读取", () => _ = Run(RefreshDisplays)));
@@ -98,7 +113,15 @@ internal sealed class SwitchForm : Form {
         FormClosing += (_, e) => { e.Cancel = true; Hide(); };
         BuildGrid(); RegisterKeys(); BuildMenu();
         if (loadError != null) SetStatus(loadError); else SetStatus("已在托盘运行。DDC 回读仅确认输入源；画面需实际观察。");
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += DisplaySettingsChanged;
         _ = Run(RefreshDisplays);
+    }
+    void DisplaySettingsChanged(object? sender, EventArgs args) {
+        if (IsDisposed || !IsHandleCreated) return;
+        try { BeginInvoke((Action)(() => {
+            try { dimming.Reconcile(); } catch (Exception e) { dimming.Reset(); SetStatus(e.Message); }
+            if (softwareDimming) _ = Run(LoadBrightness);
+        })); } catch (InvalidOperationException) { }
     }
     static FlowLayoutPanel Flow() => new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, Padding = new Padding(8) };
     void RefreshLoginStatus() {
@@ -109,21 +132,28 @@ internal sealed class SwitchForm : Form {
         } catch (Exception e) { launchAtLogin.Enabled = false; loginStatus.Text = "无法读取启动项：" + e.Message; }
     }
     void BuildBrightnessControls() {
-        foreach (Control c in brightnessPanel.Controls.Cast<Control>().ToList()) c.Dispose();
-        brightnessPanel.Controls.Clear(); brightnessControls.Clear();
-        var note = new Label { Text = "显示器硬件亮度：拖动滑块松手后应用，也可调整后点击“应用”。启动时只读取，不自动更改亮度。", AutoSize = true, MaximumSize = new Size(700, 0) };
+        foreach (var panel in new[] { softwarePanel, hardwarePanel }) {
+            foreach (Control c in panel.Controls.Cast<Control>().ToList()) c.Dispose();
+            panel.Controls.Clear();
+        }
+        brightnessControls.Clear();
+        var note = new Label { Text = softwareDimming ? "保留 HDR，调暗当前画面。100% 为原画面，最低 10%。不修改 HDR、背光或伽马；启动时不调暗，退出后恢复。" : "显示器硬件亮度，适用于关闭 HDR 的显示器。HDR 下 DDC 数值变化可能不影响画面。拖动松手后应用，或点击“应用”。", AutoSize = true, MaximumSize = new Size(700, 0) };
         brightnessPanel.Controls.Add(note); brightnessPanel.SetFlowBreak(note, true);
+        if (softwareDimming) {
+            brightnessPanel.Controls.Add(Button("恢复所有屏幕到 100%", ResetSoftwareDimming));
+            brightnessPanel.SetFlowBreak(brightnessPanel.Controls[^1], true);
+        }
         foreach (var m in config.Monitors) AddBrightnessControl(m.Name, [m.Serial]);
         if (config.Monitors.Count > 1) AddBrightnessControl("所有显示器联动", config.Monitors.Select(m => m.Serial).ToArray());
         brightnessPanel.Controls.Add(Button("读取当前亮度", () => _ = Run(RefreshBrightness)));
         brightnessPanel.SetFlowBreak(brightnessPanel.Controls[^1], true);
-        brightnessPanel.Controls.Add(new Label { Text = "联动滑块显示第一台屏幕的值，应用时设为相同比例。无法调节时请检查 HDR 或预设模式；工具不会自动修改 HDR。", AutoSize = true, MaximumSize = new Size(700, 0) });
+        brightnessPanel.Controls.Add(new Label { Text = softwareDimming ? "联动将所有屏幕设置为相同比例。软件遮罩方案来自 MonitorControl；其他工具的调暗效果会叠加。独占全屏、受保护视频和系统安全界面可能不受影响。" : "联动滑块显示第一台屏幕的值，应用时设为相同比例。工具不会自动修改 HDR。", AutoSize = true, MaximumSize = new Size(700, 0) });
     }
     void AddBrightnessControl(string name, string[] serials) {
         var row = new FlowLayoutPanel { AutoSize = true, Width = 700, MaximumSize = new Size(700, 0), Margin = new Padding(0,12,0,12) };
         var title = new Label { Text = name, AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
         var value = new Label { Text = "未读取", AutoSize = true, MaximumSize = new Size(650, 0) };
-        var slider = new TrackBar { Minimum = 0, Maximum = 100, TickFrequency = 10, Width = 550, AccessibleName = name + "亮度", Enabled = false };
+        var slider = new TrackBar { Minimum = softwareDimming ? 10 : 0, Maximum = 100, TickFrequency = 10, Width = 550, AccessibleName = name + "亮度", Enabled = false };
         var apply = Button("应用", () => _ = Run(() => SetBrightness(serials, slider.Value))); apply.Enabled = false;
         slider.ValueChanged += (_, _) => value.Text = slider.Value + "%";
         slider.MouseUp += (_, e) => { if (e.Button == MouseButtons.Left && slider.Enabled) _ = Run(() => SetBrightness(serials, slider.Value)); };
@@ -195,6 +225,8 @@ internal sealed class SwitchForm : Form {
         foreach (ToolStripItem item in menu.Items.Cast<ToolStripItem>().ToList()) item.Dispose(); menu.Items.Clear();
         foreach (var g in config.Groups) menu.Items.Add(g.Name + (config.ShortcutsEnabled && g.Shortcut != 0 ? $"   Ctrl+Alt+Shift+{g.Shortcut}" : ""), null, (_, _) => _ = Run(() => ApplyGroup(g)));
         menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("检测 / 读取", null, (_, _) => _ = Run(RefreshDisplays));
+        menu.Items.Add("亮度调节…", null, (_, _) => { tabs.SelectedIndex = 2; ShowSettings(); });
+        menu.Items.Add("恢复原画面（100%）", null, (_, _) => ResetSoftwareDimming());
         menu.Items.Add("设置与日志…", null, (_, _) => ShowSettings());
         menu.Items.Add("退出", null, (_, _) => { tray.Visible = false; Application.ExitThread(); });
     }
@@ -217,8 +249,24 @@ internal sealed class SwitchForm : Form {
         SetStatus(string.Join("；", config.Monitors.Select(m => { var found = result.Where(r => r.Serial == m.Serial).ToList(); return m.Name + "：" + (found.Count != 1 ? "不可见 / 匹配不唯一" : found[0].Input is int v ? Configuration.SourceName(v) : "读取失败"); })));
         await LoadBrightness();
     }
+    void ResetSoftwareDimming() {
+        dimming.Reset();
+        if (softwareDimming) {
+            foreach (string serial in levels.Keys.ToArray()) levels[serial] = 100;
+            UpdateBrightnessControls();
+        }
+        SetStatus("已恢复原画面（取消本工具的软件调暗）");
+    }
     async Task LoadBrightness() {
         levels.Clear(); levelErrors.Clear();
+        if (softwareDimming) {
+            var desktops = Ddc.Desktops();
+            foreach (var m in config.Monitors) {
+                if (desktops.Count(d => d.Serial == m.Serial) == 1) levels[m.Serial] = dimming.Levels.GetValueOrDefault(m.Serial,100);
+                else levelErrors[m.Serial] = "显示器当前不可见或匹配不唯一";
+            }
+            UpdateBrightnessControls(); return;
+        }
         var result = await Task.Run(Ddc.InspectBrightness);
         foreach (var m in config.Monitors) {
             var matches = result.Where(r => r.Serial == m.Serial).ToList();
@@ -234,7 +282,12 @@ internal sealed class SwitchForm : Form {
     }
     async Task SetBrightness(string[] serials, int percent) {
         if (percent is < 0 or > 100 || serials.Length == 0 || serials.Any(s => !config.Monitors.Any(m => m.Serial == s))) throw new Exception("亮度或目标显示器无效。");
-        SetStatus("正在设置亮度…");
+        if (softwareDimming) {
+            dimming.Apply(serials, percent);
+            await LoadBrightness();
+            SetStatus($"软件亮度 {percent}%（100% 为原画面，HDR 保持开启）"); return;
+        }
+        SetStatus("正在设置硬件亮度…");
         await Execute(serials.Select(s => new Operation { Serial = s, Brightness = percent }).ToList(), $"设置亮度 {percent}%");
     }
     async Task ApplyGroup(SwitchGroup g) {
@@ -262,7 +315,7 @@ internal sealed class SwitchForm : Form {
     void Import() {
         using var p = new OpenFileDialog { Filter = "JSON 配置|*.json" };
         if (p.ShowDialog() != DialogResult.OK) return;
-        try { var c = Configuration.Parse(File.ReadAllText(p.FileName)); Store(c); config = c; BuildGrid(); BuildBrightnessControls(); RegisterKeys(); BuildMenu(); saved.Text = "已导入并保存配置"; _ = Run(RefreshDisplays); }
+        try { var c = Configuration.Parse(File.ReadAllText(p.FileName)); Store(c); dimming.Reset(); config = c; BuildGrid(); BuildBrightnessControls(); RegisterKeys(); BuildMenu(); saved.Text = "已导入并保存配置"; _ = Run(RefreshDisplays); }
         catch (Exception e) { saved.Text = "导入失败：" + e.Message; }
     }
     void Export() {
@@ -272,7 +325,7 @@ internal sealed class SwitchForm : Form {
         try { File.WriteAllText(p.FileName, JsonSerializer.Serialize(config, Configuration.Json)); saved.Text = "配置已导出"; } catch (Exception e) { saved.Text = e.Message; }
     }
     protected override void Dispose(bool disposing) {
-        if (disposing) { foreach (int id in keyGroups.Keys) UnregisterHotKey(Handle,id); tray.Dispose(); menu.Dispose(); }
+        if (disposing) { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= DisplaySettingsChanged; dimming.Dispose(); foreach (int id in keyGroups.Keys) UnregisterHotKey(Handle,id); tray.Dispose(); menu.Dispose(); }
         base.Dispose(disposing);
     }
 }

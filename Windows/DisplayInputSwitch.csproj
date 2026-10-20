@@ -9,7 +9,8 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>DisplayInputSwitch</AssemblyName>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
   </PropertyGroup>
   <ItemGroup><EmbeddedResource Include="../Shared/default.json" Link="default.json" /></ItemGroup>
+  <ItemGroup><None Include="../vendor/MonitorControl/LICENSE" Link="MonitorControl-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
 </Project>
