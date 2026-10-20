@@ -10,7 +10,7 @@ internal sealed class PhysicalMonitor : IDisposable {
 }
 internal sealed record Outcome(string Serial, bool Ok, int? Input, int? Brightness, int? MaxBrightness, string? Error);
 internal sealed record BrightnessReading(string Serial, string Name, int Current, int Maximum);
-internal sealed record Desktop(string Serial, Rectangle Bounds);
+internal sealed record Desktop(string Serial, Rectangle Bounds, string Device);
 internal static class Ddc {
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] internal struct MonitorInfo {
@@ -59,7 +59,7 @@ internal static class Ddc {
                     if ((d.Flags & 1) != 0) serials.Add(Serial(d.Id));
                 }
                 if (serials.Count == 1 && !string.IsNullOrEmpty(serials[0]))
-                    result.Add(new Desktop(serials[0], Rectangle.FromLTRB(info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom)));
+                    result.Add(new Desktop(serials[0], Rectangle.FromLTRB(info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom), info.Device));
                 return true;
             } catch (Exception e) { error = e; return false; }
         }, IntPtr.Zero);

@@ -1,4 +1,5 @@
 {
+  "brightnessStep" : 5,
   "groups" : [
     {
       "displays" : [
@@ -46,6 +47,10 @@
       "shortcut" : 3
     }
   ],
+  "hotkeys" : [
+
+  ],
+  "menuBrightnessLinked" : false,
   "monitors" : [
     {
       "name" : "QX",
@@ -57,5 +62,5 @@
     }
   ],
   "shortcutsEnabled" : true,
-  "version" : 2
+  "version" : 3
 }

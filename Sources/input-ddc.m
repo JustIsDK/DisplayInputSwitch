@@ -2,6 +2,7 @@
 @import IOKit;
 @import CoreGraphics;
 #include <assert.h>
+#include <dlfcn.h>
 #include "ioregistry.h"
 #include "i2c.h"
 
@@ -97,8 +98,12 @@ int main(int argc,const char *argv[]) {
     }
     DisplayInfos displays[MAX_DISPLAYS]={}; int count=getOnlineDisplayInfos(displays);
     NSMutableArray *items=[NSMutableArray array];
-    for(int i=0;i<count;i++) if(!CGDisplayIsBuiltin(displays[i].id) && displays[i].uuid)
-        [items addObject:@{@"id":displays[i].uuid,@"name":displays[i].productName?:@"外接显示器",@"serial":displays[i].alphNumSerial?:@""}];
+    bool (*isHDREnabled)(CGDirectDisplayID)=dlsym(RTLD_DEFAULT,"CGSIsHDREnabled");
+    for(int i=0;i<count;i++) if(!CGDisplayIsBuiltin(displays[i].id) && displays[i].uuid) {
+        NSMutableDictionary *item=[@{@"id":displays[i].uuid,@"name":displays[i].productName?:@"外接显示器",@"serial":displays[i].alphNumSerial?:@""} mutableCopy];
+        if(isHDREnabled) item[@"hdr"]=isHDREnabled(displays[i].id) ? @YES : @NO;
+        [items addObject:item];
+    }
     if(list) return emit(@{@"ok":@YES,@"displays":items},0);
     if(!batch) operations=@[@{@"serial":@(argv[2])}];
     DDCTransport transports[8]={}; NSMutableArray *results=[NSMutableArray array]; BOOL preflight=YES;

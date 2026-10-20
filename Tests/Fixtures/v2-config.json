@@ -1,0 +1,61 @@
+{
+  "groups" : [
+    {
+      "displays" : [
+        {
+          "input" : 27,
+          "serial" : "J80FDH3"
+        },
+        {
+          "input" : 27,
+          "serial" : "330BJ04"
+        }
+      ],
+      "id" : "mac1",
+      "name" : "Mac 1",
+      "shortcut" : 1
+    },
+    {
+      "displays" : [
+        {
+          "input" : 27,
+          "serial" : "J80FDH3"
+        },
+        {
+          "input" : 17,
+          "serial" : "330BJ04"
+        }
+      ],
+      "id" : "mac2",
+      "name" : "Mac 2",
+      "shortcut" : 2
+    },
+    {
+      "displays" : [
+        {
+          "input" : 15,
+          "serial" : "J80FDH3"
+        },
+        {
+          "input" : 15,
+          "serial" : "330BJ04"
+        }
+      ],
+      "id" : "windows",
+      "name" : "Windows",
+      "shortcut" : 3
+    }
+  ],
+  "monitors" : [
+    {
+      "name" : "QX",
+      "serial" : "J80FDH3"
+    },
+    {
+      "name" : "QE",
+      "serial" : "330BJ04"
+    }
+  ],
+  "shortcutsEnabled" : true,
+  "version" : 2
+}

@@ -20,17 +20,20 @@ public sealed class Configuration {
     public List<MonitorSetting> Monitors { get; set; } = [];
     public List<SwitchGroup> Groups { get; set; } = [];
     public bool ShortcutsEnabled { get; set; }
+    public bool MenuBrightnessLinked { get; set; }
+    public int BrightnessStep { get; set; } = 5;
+    public List<KeyBinding> Hotkeys { get; set; } = [];
     public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
     public static bool IsSource(int v) => v is 15 or 17 or 27;
     public static string SourceName(int v) => v switch { 15 => "DP", 17 => "HDMI", 27 => "USB-C 90W", _ => $"未知 {v}" };
     public static Configuration Parse(string json) {
         var c = JsonSerializer.Deserialize<Configuration>(json, Json) ?? throw new Exception("配置为空。");
-        if (c.Version == 1) c.Version = 2; // Discard removed USB fields when saving legacy files.
+        if (c.Version is 1 or 2) c.Version = 3; // Discard removed USB fields when saving legacy files.
         c.Validate(); return c;
     }
     public void Validate() {
         void Require(bool value, string error) { if (!value) throw new Exception(error); }
-        Require(Version == 2, "配置版本不支持。");
+        Require(Version == 3, "配置版本不支持。");
         Require(Monitors is { Count: >= 1 and <= 4 } && Groups is { Count: >= 1 and <= 9 }, "配置列表不完整。");
         Require(Monitors!.All(m => m != null && !string.IsNullOrWhiteSpace(m.Serial) && !string.IsNullOrWhiteSpace(m.Name)), "名称或序列号为空。");
         var serials = Monitors.Select(m => m.Serial).ToHashSet();
@@ -42,6 +45,44 @@ public sealed class Configuration {
             Require(g.Shortcut is >= 0 and <= 9 && (g.Shortcut == 0 || keys.Add(g.Shortcut)), "快捷键无效或重复。");
             Require(g.Displays.All(a => a != null && serials.Contains(a.Serial) && IsSource(a.Input)) && g.Displays.Select(a => a.Serial).Distinct().Count() == g.Displays.Count, "组内显示器或输入源无效。");
         }
+        Require(BrightnessStep is >= 1 and <= 20, "亮度步长须为 1–20%。");
+        Require(Hotkeys != null && Hotkeys.All(h => h != null && ShortcutActions.Any(a => a.Id == h.Action)) && Hotkeys.Select(h => h.Action).Distinct().Count() == Hotkeys.Count, "快捷键操作无效或重复。");
+        foreach (var h in Hotkeys!) h.Validate();
+        foreach (bool mac in new[] { true, false }) {
+            var bindings = EffectiveHotkeys(mac);
+            Require(bindings.Select(h => (h.Key,h.Modifiers)).Distinct().Count() == bindings.Count, "快捷键重复，请修改后保存。");
+        }
+    }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<BrightnessAction> BrightnessActions {
+        get {
+            var targets = new List<(string Id,string Name,string[] Serials)> { ("all","所有显示器",Monitors.Select(m => m.Serial).ToArray()) };
+            targets.AddRange(Monitors.Select(m => ("monitor:" + m.Serial,m.Name,new[] { m.Serial })));
+            return targets.SelectMany(t => new[] {
+                new BrightnessAction("brightness:up:" + t.Id,t.Name + " · 调亮",t.Serials,1),
+                new BrightnessAction("brightness:down:" + t.Id,t.Name + " · 调暗",t.Serials,-1)
+            }).ToList();
+        }
+    }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<ShortcutAction> ShortcutActions => Groups.Select(g => new ShortcutAction("group:" + g.Id,"切换到 " + g.Name))
+        .Concat(BrightnessActions.Select(a => new ShortcutAction(a.Id,a.Name)))
+        .Append(new ShortcutAction("brightness:restore","恢复所有软件调暗（100%）")).ToList();
+    public List<KeyBinding> EffectiveHotkeys(bool mac) => Groups.Where(g => g.Shortcut != 0 && !Hotkeys.Any(h => h.Action == "group:" + g.Id))
+        .Select(g => new KeyBinding { Action = "group:" + g.Id, Key = g.Shortcut.ToString(), Modifiers = mac ? 11 : 7 })
+        .Concat(Hotkeys.Where(h => h.Key.Length != 0)).ToList();
+}
+public sealed record ShortcutAction(string Id,string Name);
+public sealed record BrightnessAction(string Id,string Name,string[] Serials,int Direction);
+public sealed class KeyBinding {
+    public string Action { get; set; } = "";
+    public string Key { get; set; } = "";
+    public int Modifiers { get; set; }
+    public static readonly string[] Keys = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".Select(c => c.ToString())
+        .Concat(new[] { "UP","DOWN","LEFT","RIGHT","SPACE","MINUS","EQUAL","COMMA","PERIOD" }).Concat(Enumerable.Range(1,12).Select(n => "F" + n)).ToArray();
+    public void Validate() {
+        if (Key == null || (Key.Length == 0 ? Modifiers != 0 : !Keys.Contains(Key) || Modifiers is < 1 or > 15 || (Modifiers & 11) == 0))
+            throw new Exception("快捷键须包含 Ctrl、Alt 或 Win，且使用支持的按键。");
     }
 }
 public sealed class Operation {
@@ -59,10 +100,12 @@ public sealed class Operation {
 }
 
 public static class Brightness {
+    public static bool UsesSoftware(string mode,bool? hdr) => mode == "hardware" ? false : mode == "software" ? true : hdr ?? true;
     public static int Percent(int current, int maximum) {
         if (maximum is <= 0 or > 65535 || current < 0 || current > maximum) throw new Exception("显示器未返回有效亮度，请检查 DDC/CI、连接和 HDR 设置。");
         return (int)Math.Round(current * 100.0 / maximum, MidpointRounding.AwayFromZero);
     }
+    public static int Adjusted(int current,int delta,bool software) => Math.Clamp(current + delta,software ? 10 : 0,100);
     public static int Raw(int percent, int maximum) {
         if (percent is < 0 or > 100 || maximum is <= 0 or > 65535) throw new Exception("亮度范围无效。");
         return (percent * maximum + 50) / 100;

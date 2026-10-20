@@ -17,7 +17,10 @@ struct Configuration: Codable, Equatable {
     var monitors: [MonitorSetting]
     var groups: [SwitchGroup]
     var shortcutsEnabled: Bool
-    static let initial = Configuration(version: 2,
+    var menuBrightnessLinked = false
+    var brightnessStep = 5
+    var hotkeys: [KeyBinding] = []
+    static let initial = Configuration(version: 3,
         monitors: [.init(serial: "J80FDH3", name: "QX"), .init(serial: "330BJ04", name: "QE")],
         groups: [
             .init(id: "mac1", name: "Mac 1", displays: [.init(serial: "J80FDH3", input: 27), .init(serial: "330BJ04", input: 27)], shortcut: 1),
@@ -26,7 +29,7 @@ struct Configuration: Codable, Equatable {
         ], shortcutsEnabled: true)
     func validate() throws {
         func require(_ condition: Bool, _ message: String) throws { if !condition { throw ConfigError(message: message) } }
-        try require(version == 2, "配置版本不支持。")
+        try require(version == 3, "配置版本不支持。")
         try require(!monitors.isEmpty && monitors.count <= 4, "显示器数量须为 1–4 台。")
         let serials = Set(monitors.map(\.serial))
         try require(serials.count == monitors.count && monitors.allSatisfy { !$0.serial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.name.isEmpty }, "显示器名称和序列号不能为空或重复。")
@@ -38,6 +41,17 @@ struct Configuration: Codable, Equatable {
             if g.shortcut != 0 { try require(keys.insert(g.shortcut).inserted, "组别快捷键不能重复。") }
             try require(!g.displays.isEmpty && Set(g.displays.map(\.serial)).count == g.displays.count, "组内显示器不能为空或重复。")
             for a in g.displays { try require(serials.contains(a.serial) && [15,17,27].contains(a.input), "显示器或输入源无效。") }
+        }
+        try require((1...20).contains(brightnessStep), "亮度步长须为 1–20%。")
+        let actions = Set(shortcutActions.map(\.id))
+        try require(Set(hotkeys.map(\.action)).count == hotkeys.count, "同一操作不能重复配置快捷键。")
+        for h in hotkeys {
+            try require(actions.contains(h.action), "快捷键操作不存在。")
+            try h.validate()
+        }
+        for mac in [true, false] {
+            let bindings = effectiveHotkeys(mac: mac)
+            try require(Set(bindings.map { "\($0.modifiers):\($0.key)" }).count == bindings.count, "快捷键重复，请修改后保存。")
         }
     }
 }
@@ -54,11 +68,14 @@ extension Configuration {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let oldVersion = try c.decode(Int.self, forKey: .version)
-        guard [1, 2].contains(oldVersion) else { throw ConfigError(message: "配置版本不支持。") }
-        version = 2
+        guard [1, 2, 3].contains(oldVersion) else { throw ConfigError(message: "配置版本不支持。") }
+        version = 3
         monitors = try c.decode([MonitorSetting].self, forKey: .monitors)
         groups = try c.decode([SwitchGroup].self, forKey: .groups)
         shortcutsEnabled = try c.decode(Bool.self, forKey: .shortcutsEnabled)
+        menuBrightnessLinked = try c.decodeIfPresent(Bool.self, forKey: .menuBrightnessLinked) ?? false
+        brightnessStep = try c.decodeIfPresent(Int.self, forKey: .brightnessStep) ?? 5
+        hotkeys = try c.decodeIfPresent([KeyBinding].self, forKey: .hotkeys) ?? []
     }
 }
 func brightnessPercent(current: Int, maximum: Int) throws -> Int {
@@ -70,4 +87,44 @@ func brightnessPercent(current: Int, maximum: Int) throws -> Int {
 func softwareOpacity(percent: Int) throws -> Double {
     guard (10...100).contains(percent) else { throw ConfigError(message: "软件亮度须为 10–100%。") }
     return Double(100 - percent) / 100
+}
+
+struct KeyBinding: Codable, Equatable {
+    var action: String
+    var key: String
+    var modifiers: Int // Control 1, Alt/Option 2, Shift 4, Command/Win 8.
+    static let keys = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789").map(String.init) + ["UP", "DOWN", "LEFT", "RIGHT", "SPACE", "MINUS", "EQUAL", "COMMA", "PERIOD"] + (1...12).map { "F\($0)" }
+    func validate() throws {
+        guard key.isEmpty ? modifiers == 0 : Self.keys.contains(key) && (1...15).contains(modifiers) && modifiers & 11 != 0 else {
+            throw ConfigError(message: "快捷键须包含 Control、Option/Alt 或 Command/Win，且使用支持的按键。")
+        }
+    }
+}
+struct ShortcutAction: Identifiable { var id: String; var name: String }
+struct BrightnessAction {
+    var id: String; var name: String; var serials: [String]; var direction: Int
+}
+extension Configuration {
+    var brightnessActions: [BrightnessAction] {
+        let targets = [("all", "所有显示器", monitors.map(\.serial))] + monitors.map { ("monitor:" + $0.serial, $0.name, [$0.serial]) }
+        return targets.flatMap { id, name, serials in
+            [BrightnessAction(id: "brightness:up:" + id, name: name + " · 调亮", serials: serials, direction: 1),
+             BrightnessAction(id: "brightness:down:" + id, name: name + " · 调暗", serials: serials, direction: -1)]
+        }
+    }
+    var shortcutActions: [ShortcutAction] {
+        groups.map { .init(id: "group:" + $0.id, name: "切换到 " + $0.name) } + brightnessActions.map { .init(id: $0.id, name: $0.name) } + [.init(id: "brightness:restore", name: "恢复所有软件调暗（100%）")]
+    }
+    func effectiveHotkeys(mac: Bool) -> [KeyBinding] {
+        let legacy = groups.filter { g in g.shortcut != 0 && !hotkeys.contains { $0.action == "group:" + g.id } }.map {
+            KeyBinding(action: "group:" + $0.id, key: String($0.shortcut), modifiers: mac ? 11 : 7)
+        }
+        return legacy + hotkeys.filter { !$0.key.isEmpty }
+    }
+}
+func adjustedBrightness(current: Int, delta: Int, software: Bool) -> Int {
+    min(100, max(software ? 10 : 0, current + delta))
+}
+func brightnessUsesSoftware(mode: String, hdr: Bool?) -> Bool {
+    mode == "hardware" ? false : mode == "software" ? true : hdr ?? true
 }
