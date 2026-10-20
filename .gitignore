@@ -1,0 +1,8 @@
+build/
+.dotnet/
+Windows/bin/
+Windows/obj/
+.DS_Store
+*.log
+Tests/WindowsCore/bin/
+Tests/WindowsCore/obj/
