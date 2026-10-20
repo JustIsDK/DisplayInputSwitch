@@ -15,6 +15,7 @@ macOS 菜单栏、Windows 托盘工具。通过 DDC/CI 切换多台显示器的�
 ## 使用
 
 - 点击菜单栏 / 托盘中的组名，同时发送该组的显示器切换计划。设置中可添加、删除组别，修改名称、每屏输入源和 USB 归属；USB 可选 Mac、Windows、保持现状。
+- “设置与日志 → 通用 → 开机启动”控制登录后自动运行，开关立即生效，首次安装默认关闭。此选项仅作用于当前电脑，不随 JSON 配置导入导出。macOS 使用系统登录项 API，如需批准会提供系统设置入口；Windows 注册当前用户的启动项，可在系统“启动应用”中管理。Mac 请放在“应用程序”文件夹，Windows 请保存在固定位置；程序移动后须重新设置开机启动。
 - 全局快捷键：macOS `Control + Option + Command + 数字`；Windows `Ctrl + Alt + Shift + 数字`。组内设置数字 1–9，0 关闭该组快捷键。保存配置后注册，注册冲突会在设置中显示。
 - 保留独立的 `USB → Mac` / `USB → Windows` 操作入口，使用前需完成下述硬件支持确认。
 - “检测 / 读取”只读取显示器列表和视频输入。日志区分 DDC 回读确认、请求已发送但回读不可用、输入不匹配、逐屏错误及 USB 未执行。DDC 回读不证明画面已点亮。
@@ -52,7 +53,7 @@ dotnet publish Windows/DisplayInputSwitch.csproj -c Release -r win-x64 --self-co
 
 也可在 macOS 交叉构建 Windows 版本：`DOTNET_BIN=/path/to/dotnet zsh build-windows.sh`。输出 `build/windows-x64/DisplayInputSwitch.exe`。构建产物、本地 SDK、日志和 IDE 生成目录不入 Git。
 
-已验证：Swift / .NET 配置验证与往返序列化、输入源白名单、快捷键冲突配置拒绝、USB 未校准拒绝和位掩码保留、DDC 报文及响应校验、EDID 序列号解析，macOS 应用编译和 Windows x64 发布。
+已验证：Swift / .NET 配置验证与往返序列化、输入源白名单、快捷键冲突配置拒绝、USB 未校准拒绝和位掩码保留、DDC 报文及响应校验、EDID 序列号解析、Windows 启动命令路径引用，macOS 应用编译和 Windows x64 发布。macOS 开机启动开关已实际开启、读取系统确认，再关闭并确认恢复；未重启或注销测试。
 
 未验证：Windows GUI / DXVA2 实机；新版完整双屏切换及 USB 写入。旧版单屏 DP / USB-C 切换曾实测；原先切换后黑屏且 OSD 不显示的问题，在显示器恢复出厂设置后已由使用者确认消失。
 

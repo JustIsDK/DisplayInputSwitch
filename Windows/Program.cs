@@ -25,6 +25,8 @@ internal sealed class SwitchForm : Form {
     readonly TextBox log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, Dock = DockStyle.Fill, WordWrap = false };
     readonly DataGridView grid = new() { Dock = DockStyle.Top, Height = 270, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect };
     readonly CheckBox enableKeys = new() { Text = "启用全局快捷键：Ctrl + Alt + Shift + 组别数字", AutoSize = true };
+    readonly CheckBox launchAtLogin = new() { Text = "开机启动", AutoSize = true };
+    readonly Label loginStatus = new() { AutoSize = true, MaximumSize = new Size(700, 0) };
     readonly TabControl tabs = new() { Dock = DockStyle.Fill };
     readonly Dictionary<int, string> keyGroups = [];
     Configuration config;
@@ -39,6 +41,23 @@ internal sealed class SwitchForm : Form {
         using var reader = new StreamReader(resource); config = Configuration.Parse(reader.ReadToEnd());
         if (File.Exists(ConfigPath)) try { config = Configuration.Parse(File.ReadAllText(ConfigPath)); } catch (Exception e) { loadError = "配置读取失败，显示默认配置；原文件保留：" + e.Message; }
         Controls.Add(tabs); Controls.Add(status);
+        var generalPage = new TabPage("通用") { Padding = new Padding(12) };
+        var general = Flow();
+        general.Controls.Add(launchAtLogin); general.SetFlowBreak(launchAtLogin, true);
+        general.Controls.Add(new Label { Text = "登录后自动在系统托盘运行。更改立即生效，仅用于本机。请将程序保存在固定位置。", AutoSize = true, MaximumSize = new Size(700, 0) });
+        general.SetFlowBreak(general.Controls[^1], true);
+        general.Controls.Add(loginStatus); general.SetFlowBreak(loginStatus, true);
+        general.Controls.Add(Button("打开系统启动应用设置…", () => {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:startupapps") { UseShellExecute = true }); }
+            catch (Exception e) { loginStatus.Text = e.Message; }
+        }));
+        generalPage.Controls.Add(general); tabs.TabPages.Add(generalPage);
+        RefreshLoginStatus();
+        launchAtLogin.Click += (_, _) => {
+            try { Startup.SetEnabled(launchAtLogin.Checked); RefreshLoginStatus(); SetStatus("开机启动：" + loginStatus.Text); }
+            catch (Exception e) { RefreshLoginStatus(); loginStatus.Text = "更改失败：" + e.Message; SetStatus(loginStatus.Text); }
+        };
+        Activated += (_, _) => RefreshLoginStatus();
         var groupsPage = new TabPage("组别") { Padding = new Padding(12) };
         var groupActions = Flow(); groupActions.Dock = DockStyle.Fill;
         groupActions.Controls.Add(Button("添加组别", () => {
@@ -85,6 +104,13 @@ internal sealed class SwitchForm : Form {
         _ = Run(RefreshDisplays);
     }
     static FlowLayoutPanel Flow() => new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, Padding = new Padding(8) };
+    void RefreshLoginStatus() {
+        try {
+            launchAtLogin.Checked = Startup.IsRegistered();
+            launchAtLogin.Enabled = true;
+            loginStatus.Text = launchAtLogin.Checked ? "已注册当前路径的启动项；若被系统禁用，请在“启动应用”中启用。" : "当前路径未注册开机启动。";
+        } catch (Exception e) { launchAtLogin.Enabled = false; loginStatus.Text = "无法读取启动项：" + e.Message; }
+    }
     static Button Button(string text, Action action) { var b = new Button { Text = text, AutoSize = true, Margin = new Padding(4,8,4,8) }; b.Click += (_, _) => action(); return b; }
     void ShowSettings() { Show(); WindowState = FormWindowState.Normal; Activate(); }
     void BuildGrid() {

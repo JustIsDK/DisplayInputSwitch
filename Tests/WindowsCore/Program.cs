@@ -21,4 +21,9 @@ var op = c.UsbOperation(27,"mac"); Check(op.UsbMask == 0xc0 && op.UsbBits == 0x4
 Check(((0x2280 & ~op.UsbMask!.Value) | op.UsbBits!.Value) == 0x2240);
 var edid = new byte[128]; edid[57] = 0xff; Encoding.ASCII.GetBytes("J80FDH3\n     ").CopyTo(edid,59);
 Check(Edid.Serial(edid) == "J80FDH3"); Check(Edid.Serial(new byte[20]) == "");
-Console.WriteLine("Windows core checks passed: shared config, validation, USB masking and EDID serial");
+Check(StartupCommand.ForExecutable(@"C:\Apps\显示器 切换\DisplayInputSwitch.exe") == "\"C:\\Apps\\显示器 切换\\DisplayInputSwitch.exe\"");
+foreach (string path in new[] { "", "bad\"path", "bad\npath", "bad\0path" }) {
+    try { StartupCommand.ForExecutable(path); } catch (ArgumentException) { continue; }
+    throw new Exception("Invalid startup path accepted");
+}
+Console.WriteLine("Windows core checks passed: shared config, validation, USB masking, EDID serial and startup command quoting");

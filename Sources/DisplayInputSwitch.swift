@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Carbon
 import UniformTypeIdentifiers
+import ServiceManagement
 
 struct Display: Decodable, Identifiable { let id: String; let name: String; let serial: String }
 struct Outcome: Decodable { let serial: String; let ok: Bool; let input: Int?; let videoSent: Bool?; let usbSent: Bool?; let error: String? }
@@ -78,6 +79,9 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     @Published var log = ""
     @Published var shortcutStatus = ""
     @Published var saveStatus = ""
+    @Published var launchAtLogin = false
+    @Published var loginStatus = ""
+    @Published var loginNeedsApproval = false
     let configURL: URL
     let logURL: URL
     private let hotkeys = Hotkeys()
@@ -98,8 +102,33 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
             Task { await self.apply(group) }
         }
         shortcutStatus = hotkeys.register(config)
-        record("启动显示器切换 2.1")
+        refreshLoginStatus()
+        record("启动显示器切换 2.2")
         Task { await refresh() }
+    }
+    func refreshLoginStatus() {
+        let state = SMAppService.mainApp.status
+        launchAtLogin = state == .enabled || state == .requiresApproval
+        loginNeedsApproval = state == .requiresApproval
+        switch state {
+        case .enabled: loginStatus = "已开启，登录后自动在菜单栏运行。"
+        case .requiresApproval: loginStatus = "等待系统允许，请在系统设置的登录项中启用。"
+        case .notRegistered: loginStatus = "已关闭。"
+        case .notFound: loginStatus = "尚未注册开机启动。"
+        @unknown default: loginStatus = "无法读取系统登录项状态。"
+        }
+    }
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+            refreshLoginStatus()
+            record("开机启动：\(loginStatus)")
+        } catch {
+            refreshLoginStatus()
+            loginStatus = "更改失败：\(error.localizedDescription)"
+            record("开机启动：\(loginStatus)")
+        }
     }
     func record(_ message: String) {
         let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
@@ -231,6 +260,19 @@ struct SwitchView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { Text("显示器切换").font(.title2.bold()); Spacer(); Button("检测 / 读取") { Task { await model.refresh() } }.disabled(model.busy) }
             TabView {
+                Form {
+                    Section {
+                        Toggle("开机启动", isOn: Binding(
+                            get: { model.launchAtLogin },
+                            set: { model.setLaunchAtLogin($0) }))
+                        Text("登录后自动在菜单栏运行。更改立即生效，仅用于本机。")
+                            .foregroundStyle(.secondary)
+                        Text(model.loginStatus).textSelection(.enabled)
+                        if model.loginNeedsApproval {
+                            Button("打开系统登录项设置…") { SMAppService.openSystemSettingsLoginItems() }
+                        }
+                    }
+                }.formStyle(.grouped).tabItem { Text("通用") }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         ForEach($model.config.groups) { $group in
@@ -311,6 +353,9 @@ struct SwitchView: View {
             HStack(alignment: .top) { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                 .padding(10).background(.quaternary).clipShape(RoundedRectangle(cornerRadius: 6))
         }.padding(20).frame(width: 760, height: 650)
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                model.refreshLoginStatus()
+            }
     }
 }
 struct MenuPanel: View {
