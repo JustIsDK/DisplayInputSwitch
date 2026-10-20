@@ -50,6 +50,14 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     var softwareDimming: Bool { brightnessMode != "hardware" }
     private var registeredConfig = Configuration.initial
     private let dimming = SoftwareDimming()
+    private let brightnessHUD = BrightnessHUD()
+    private let brightnessKeys = BrightnessKeys()
+    @Published var brightnessKeysEnabled = UserDefaults.standard.bool(forKey: "brightnessKeysEnabled")
+    @Published var brightnessKeysStatus = ""
+    @Published var adjustingBrightness = false
+    var blocksInteraction: Bool { busy && !adjustingBrightness }
+    private var pendingBrightness: (serials: [String], percent: Int?, delta: Int?)?
+    private var brightnessGeneration = 0
     private var observers: [NSObjectProtocol] = []
     @Published var levelErrors: [String: String] = [:]
     @Published var busy = false
@@ -78,20 +86,61 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         hotkeys.action = { [weak self] action in
             Task { await self?.performShortcut(action) }
         }
+        brightnessKeys.acceptsEvent = { [weak self] in
+            guard let self else { return false }
+            let targets = self.brightnessKeyTargets()
+            return self.recordingAction == nil && !self.blocksInteraction && !targets.isEmpty && targets.allSatisfy { self.levels[$0] != nil }
+        }
+        brightnessKeys.action = { [weak self] direction in
+            guard let self else { return }
+            let targets = self.brightnessKeyTargets()
+            Task { await self.setBrightness(targets, delta: direction * self.config.brightnessStep) }
+        }
+        refreshBrightnessKeys()
         registeredConfig = config
         shortcutStatus = hotkeys.register(config)
         refreshLoginStatus()
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 self?.dimming.reconcile()
+                self?.brightnessHUD.hide()
                 await self?.refreshBrightness()
             }
         })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dimming.reset() }
+            MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.5")
+        record("启动显示器切换 2.6")
         Task { await refresh() }
+    }
+    func brightnessKeyTargets() -> [String] {
+        if config.menuBrightnessLinked { return config.monitors.map(\.serial) }
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }),
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue(),
+              let display = displays.first(where: { $0.id == CFUUIDCreateString(nil, uuid) as String }),
+              config.monitors.contains(where: { $0.serial == display.serial }) else { return [] }
+        return [display.serial]
+    }
+    func refreshBrightnessKeys() {
+        guard brightnessKeysEnabled else { brightnessKeys.stop(); brightnessKeysStatus = "已关闭，保留键盘亮度键的系统行为。"; return }
+        brightnessKeysStatus = brightnessKeys.start() ? "已接入顶部亮度键；联动时调全部屏幕，分开时调鼠标所在屏幕。" : brightnessKeys.trusted ? "系统未能接入亮度键；请继续使用自定义全局快捷键。" : "需要在系统设置 → 隐私与安全性 → 辅助功能中允许“显示器切换”。授权后返回本工具。"
+    }
+    func setBrightnessKeysEnabled(_ enabled: Bool) {
+        brightnessKeysEnabled = enabled; UserDefaults.standard.set(enabled, forKey: "brightnessKeysEnabled")
+        if enabled { brightnessKeys.requestPermission() }
+        refreshBrightnessKeys()
+    }
+    func openBrightnessKeyPermissions() {
+        brightnessKeys.requestPermission()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
+    }
+    private func showBrightnessHUD(_ serials: [String]) {
+        brightnessHUD.show(serials.compactMap { serial in
+            guard let percent = levels[serial], levelErrors[serial] == nil,
+                  let display = displays.first(where: { $0.serial == serial }) else { return nil }
+            return (id: display.id, name: config.monitors.first { $0.serial == serial }?.name ?? display.name, percent: percent)
+        })
     }
     func refreshLoginStatus() {
         let state = SMAppService.mainApp.status
@@ -143,12 +192,8 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         guard recordingAction == nil else { return }
         if action == "brightness:restore" { resetSoftwareDimming(); return }
         if let group = config.groups.first(where: { "group:" + $0.id == action }) { await apply(group); return }
-        guard !busy, let adjustment = config.brightnessActions.first(where: { $0.id == action }) else { return }
-        await refreshBrightness()
-        guard adjustment.serials.allSatisfy({ levels[$0] != nil }), let first = adjustment.serials.first, let current = levels[first] else {
-            status = "目标显示器亮度不可用；快捷键未执行。"; record(status); return
-        }
-        await setBrightness(adjustment.serials, percent: adjustedBrightness(current: current, delta: adjustment.direction * config.brightnessStep, software: minimumBrightness(adjustment.serials) == 10))
+        guard let adjustment = config.brightnessActions.first(where: { $0.id == action }) else { return }
+        await setBrightness(adjustment.serials, delta: adjustment.direction * config.brightnessStep)
     }
     func save() {
         do {
@@ -168,30 +213,32 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         return hdr == true ? "HDR 已开启 · 软件调暗" : hdr == false ? "HDR 已关闭 · 硬件调光" : "HDR 未知 · 软件调暗"
     }
     func loadBrightness() async {
-        levels.removeAll(); levelErrors.removeAll()
+        var nextLevels: [String: Int] = [:], nextErrors: [String: String] = [:]
         dimming.reconcile()
         for m in config.monitors {
             let matches = displays.filter { $0.serial == m.serial }
-            guard matches.count == 1, dimming.available(matches[0].id) else { levelErrors[m.serial] = "显示器不可见或匹配不唯一"; continue }
-            if usesSoftware(m.serial) { levels[m.serial] = dimming.levels[matches[0].id] ?? 100 }
+            guard matches.count == 1, dimming.available(matches[0].id) else { nextErrors[m.serial] = "显示器不可见或匹配不唯一"; continue }
+            if usesSoftware(m.serial) { nextLevels[m.serial] = dimming.levels[matches[0].id] ?? 100 }
             else {
                 try? dimming.apply([matches[0].id], percent: 100)
                 do {
                     let r = try await runHelper(["brightness-get",m.serial])
                     guard let current = r.brightness, let maximum = r.maxBrightness else { throw ConfigError(message: "亮度响应不完整。") }
-                    levels[m.serial] = try brightnessPercent(current: current, maximum: maximum)
-                } catch { levelErrors[m.serial] = error.localizedDescription }
+                    nextLevels[m.serial] = try brightnessPercent(current: current, maximum: maximum)
+                } catch { nextErrors[m.serial] = error.localizedDescription }
             }
         }
+        levels = nextLevels; levelErrors = nextErrors
     }
     func refreshBrightness() async {
-        guard !busy else { return }; busy = true; defer { busy = false }
+        guard !busy else { return }; adjustingBrightness = true; busy = true
+        defer { finishBrightness() }
         do { displays = try await runHelper(["list"]).displays ?? []; await loadBrightness() }
         catch { levels.removeAll(); status = error.localizedDescription; record(status) }
     }
     func refresh() async {
         guard !busy else { return }; busy = true; defer { busy = false }
-        status = "正在检测…"; readings.removeAll(); levels.removeAll(); levelErrors.removeAll()
+        status = "正在检测…"; readings.removeAll()
         do {
             displays = try await runHelper(["list"]).displays ?? []
             for m in config.monitors where displays.contains(where: { $0.serial == m.serial }) {
@@ -204,15 +251,18 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     }
     func selectBrightnessMode(_ mode: String) {
         guard !busy, ["auto","software","hardware"].contains(mode), brightnessMode != mode else { return }
+        brightnessGeneration += 1; pendingBrightness = nil; brightnessHUD.hide()
         dimming.reset(); brightnessMode = mode
         UserDefaults.standard.set(mode, forKey: "brightnessMode")
         levels.removeAll(); levelErrors.removeAll()
         Task { await refreshBrightness() }
     }
     func resetSoftwareDimming() {
+        brightnessGeneration += 1; pendingBrightness = nil
         dimming.reset()
         for m in config.monitors where usesSoftware(m.serial) && levels[m.serial] != nil { levels[m.serial] = 100 }
         status = "已恢复原画面（取消本工具的软件调暗）"; record(status)
+        showBrightnessHUD(config.monitors.map(\.serial).filter(usesSoftware))
     }
     func execute(_ operations: [Operation], title: String) async throws {
         let json = String(data: try JSONEncoder().encode(operations), encoding: .utf8)!
@@ -248,16 +298,42 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
             try await execute(ops, title: group.name)
         } catch { status = error.localizedDescription; record(status) }
     }
-    func setBrightness(_ serials: [String], percent: Int) async {
-        guard !busy else { return }; busy = true; defer { busy = false }
-        status = "正在设置亮度…"
+    private func finishBrightness() {
+        busy = false; adjustingBrightness = false
+        if let pending = pendingBrightness {
+            pendingBrightness = nil
+            let generation = brightnessGeneration
+            Task {
+                guard generation == brightnessGeneration else { return }
+                await setBrightness(pending.serials, percent: pending.percent, delta: pending.delta)
+            }
+        }
+    }
+    func setBrightness(_ serials: [String], percent requested: Int? = nil, delta: Int? = nil) async {
+        guard !busy else {
+            if adjustingBrightness {
+                let accumulated = delta.flatMap { change in pendingBrightness.flatMap { $0.serials == serials ? $0.delta.map { $0 + change } : nil } }
+                pendingBrightness = (serials, requested, accumulated ?? delta)
+            }
+            return
+        }
+        adjustingBrightness = true; busy = true; defer { finishBrightness() }
+        let generation = brightnessGeneration
         do {
-            guard (0...100).contains(percent), !serials.isEmpty,
+            guard (requested != nil) != (delta != nil), !serials.isEmpty,
                   Set(serials).count == serials.count,
                   serials.allSatisfy({ s in config.monitors.contains { $0.serial == s } }) else {
                 throw ConfigError(message: "亮度或目标显示器无效。")
             }
             displays = try await runHelper(["list"]).displays ?? []
+            let percent: Int
+            if let delta {
+                await loadBrightness()
+                guard serials.allSatisfy({ levels[$0] != nil }), let first = serials.first, let current = levels[first] else { throw ConfigError(message: "目标显示器亮度不可用；快捷键未执行。") }
+                percent = adjustedBrightness(current: current, delta: delta, software: minimumBrightness(serials) == 10)
+            } else { percent = requested! }
+            guard (0...100).contains(percent) else { throw ConfigError(message: "亮度须为 0–100%。") }
+            guard generation == brightnessGeneration else { return }
             let soft = serials.filter(usesSoftware), hard = serials.filter { !usesSoftware($0) }
             let ids = try serials.map { serial -> String in
                 let matches = displays.filter { $0.serial == serial }
@@ -268,19 +344,23 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
             // Reset stale shades when HDR was turned off, before applying hardware brightness.
             for (serial,id) in zip(serials,ids) where hard.contains(serial) { try dimming.apply([id], percent: 100) }
             if !hard.isEmpty { try await execute(hard.map { Operation(serial: $0, brightness: percent) }, title: "硬件亮度 \(percent)%") }
+            guard generation == brightnessGeneration else { return }
             if !soft.isEmpty {
                 let softIDs = zip(serials,ids).filter { soft.contains($0.0) }.map { $0.1 }
                 try dimming.apply(softIDs, percent: percent)
-                for serial in soft { levels[serial] = percent }
+                for serial in soft { levels[serial] = percent; levelErrors.removeValue(forKey: serial) }
                 status = (hard.isEmpty ? "" : status + "\n") + "软件亮度 \(percent)%（不更改 HDR）"; record(status)
             }
+            showBrightnessHUD(serials)
         } catch { status = error.localizedDescription; record(status) }
     }
     func importConfig() {
+        guard !busy else { return }
         let p = NSOpenPanel(); p.allowedContentTypes = [.json]
         guard p.runModal() == .OK, let url = p.url else { return }
         do {
             let c = try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: url)); try c.validate()
+            brightnessGeneration += 1; pendingBrightness = nil; brightnessHUD.hide()
             dimming.reset(); config = c; save(); Task { await refresh() }
         } catch { saveStatus = "导入失败：\(error.localizedDescription)" }
     }
@@ -298,7 +378,8 @@ struct BrightnessControl: View {
     @ObservedObject var model: SwitchModel
     let serials: [String]
     let name: String
-    @State private var value = 0.0
+    @State private var value = 100.0
+    @State private var editing = false
     private var available: Bool { !serials.isEmpty && serials.allSatisfy { model.levels[$0] != nil } }
     private func sync() { value = Double(serials.first.flatMap { model.levels[$0] } ?? (model.softwareDimming ? 100 : 0)) }
     var body: some View {
@@ -311,20 +392,20 @@ struct BrightnessControl: View {
                 Spacer()
                 Text(available ? "\(Int(value))%" : "不可用").monospacedDigit().foregroundStyle(.secondary)
                 Button("应用") { Task { await model.setBrightness(serials, percent: Int(value)) } }
-                    .disabled(model.busy || !available)
+                    .disabled(model.blocksInteraction || !available)
             }
-            Slider(value: $value, in: Double(model.minimumBrightness(serials))...100, step: 1, onEditingChanged: { editing in
-                if !editing { Task { await model.setBrightness(serials, percent: Int(value)) } }
+            Slider(value: $value, in: Double(model.minimumBrightness(serials))...100, step: 1, onEditingChanged: { active in
+                editing = active
+                if !active { Task { await model.setBrightness(serials, percent: Int(value)) } }
             }).accessibilityLabel("\(name)亮度")
-                .disabled(model.busy || !available)
+                .disabled(model.blocksInteraction || !available)
             if serials.count == 1, let serial = serials.first, let error = model.levelErrors[serial] {
                 Text(error).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         .onAppear { sync() }
         .onChange(of: model.brightnessMode) { _, _ in sync() }
-        .onChange(of: model.levels) { _, _ in sync() }
-        .onChange(of: model.busy) { _, busy in if !busy { sync() } }
+        .onChange(of: model.levels) { _, _ in if !editing { sync() } }
     }
 }
 struct BrightnessPage: View {
@@ -358,7 +439,7 @@ struct SwitchView: View {
     @ObservedObject var model: SwitchModel
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("显示器切换").font(.title2.bold()); Spacer(); Button("检测 / 读取") { Task { await model.refresh() } }.disabled(model.busy) }
+            HStack { Text("显示器切换").font(.title2.bold()); Spacer(); Button("检测 / 读取") { Task { await model.refresh() } }.disabled(model.blocksInteraction) }
             TabView {
                 Form {
                     Section {
@@ -435,12 +516,16 @@ struct SwitchView: View {
                     ScrollView { Text(model.log).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                     Button("打开日志文件") { NSWorkspace.shared.activateFileViewerSelecting([model.logURL]) }
                 }.padding().tabItem { Label("日志", systemImage: "doc.text") }
-            }.disabled(model.busy)
-            HStack(alignment: .top) { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+            }.disabled(model.blocksInteraction)
+            HStack(alignment: .top) {
+                ProgressView().controlSize(.small).opacity(model.blocksInteraction ? 1 : 0).frame(width: 16)
+                Text(model.status).textSelection(.enabled).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(height: 52, alignment: .topLeading)
                 .padding(10).background(.quaternary).clipShape(RoundedRectangle(cornerRadius: 6))
         }.padding(20).frame(width: 760, height: 650)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 model.refreshLoginStatus()
+                model.refreshBrightnessKeys()
             }
     }
 }
@@ -453,7 +538,7 @@ struct MenuPanel: View {
             ForEach(model.config.groups) { g in
                 Button { Task { await model.apply(g) } } label: {
                     HStack { Text(g.name); Spacer(); if model.config.shortcutsEnabled { Text(Hotkeys.label(model.binding(for: "group:" + g.id))).foregroundStyle(.secondary) } }.frame(maxWidth: .infinity)
-                }.disabled(model.busy)
+                }.disabled(model.blocksInteraction)
             }
             Divider()
             Text(model.brightnessMode == "auto" ? "自动亮度 · 按每屏 HDR 状态" : model.softwareDimming ? "软件亮度 · HDR" : "硬件亮度 · SDR").font(.caption).foregroundStyle(.secondary)
@@ -468,11 +553,14 @@ struct MenuPanel: View {
                 Button("恢复原画面（100%）") { model.resetSoftwareDimming() }
             }
             Divider()
-            HStack(alignment: .top) { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).font(.callout).fixedSize(horizontal: false, vertical: true) }
+            HStack(alignment: .top) {
+                ProgressView().controlSize(.small).opacity(model.blocksInteraction ? 1 : 0).frame(width: 16)
+                Text(model.status).font(.callout).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(height: 52, alignment: .topLeading)
             Divider()
             HStack {
                 Button("设置与日志…") { NSApp.activate(ignoringOtherApps: true); openSettings() }
-                Button("检测") { Task { await model.refresh() } }.disabled(model.busy)
+                Button("检测") { Task { await model.refresh() } }.disabled(model.blocksInteraction)
                 Spacer(); Button("退出") { NSApp.terminate(nil) }
             }
         }.padding(18).frame(width: 380)

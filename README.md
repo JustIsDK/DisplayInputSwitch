@@ -41,6 +41,10 @@ macOS 菜单栏、Windows 托盘工具。通过 DDC/CI 切换多台显示器的�
 
 每项操作均可录制组合键：切换组别、所有屏幕调亮/调暗、每屏调亮/调暗、恢复所有软件调暗。点击按键框（Windows 点击“录制”），按下包含 Control、Option/Alt 或 Command/Win 的组合键；Esc 取消，清除禁用该项，保存后注册为全局快捷键。系统占用和重复配置会显示错误。亮度步长可设置 1–20%，跟随当前逐屏调光方式；联动快捷键以第一台屏幕当前值计算，将所有屏幕设为相同比例。恢复操作只撤掉本工具的遮罩。
 
+macOS 调节成功后，在目标屏幕下方显示类似系统亮度提示的太阳图标、屏幕名、百分比和进度条；约 1.2 秒后淡出。联动时两屏分别显示，连续操作更新原浮层，不抢焦点、不挡鼠标。调节期间保留现有亮度数值，完成读取后一次更新，不再反复禁用整页；连续调节会合并待处理请求，拖动时保留滑块位置。Windows 同步修复整页禁用引起的闪烁；系统样式浮层目前仅用于 macOS。
+
+macOS “状态栏 → 使用键盘顶部亮度键”是独立的本机开关，默认关闭，立即生效，不随 JSON 导入导出。启用后需在系统设置 → 隐私与安全性 → 辅助功能中允许“显示器切换”，返回本工具设置页即可重试；权限不足或系统无法接入会显示原因，原有自定义全局快捷键仍可用。启用时，联动布局调全部配置屏幕，分开布局调鼠标所在的配置屏幕；无可用目标时保留系统行为。不接管音量、键盘背光、内置屏幕调光或 Command/Control/Option 修饰的系统亮度键组合。顶排设为标准 F1、F2 时，请配合 Fn 使用太阳图标功能。同类工具若也接管亮度键，建议只在一个工具中启用。
+
 自定义组别组合键覆盖组内原有数字快捷键；清除后该组快捷键禁用。跨平台导入时 Command 对应 Win，Option 对应 Alt；系统保留组合键可能无法注册。录制时暂时停用本工具快捷键，结束或取消后恢复已保存的绑定。
 
 ### 批量切换边界
@@ -67,7 +71,7 @@ dotnet publish Windows/DisplayInputSwitch.csproj -c Release -r win-x64 --self-co
 
 也可在 macOS 交叉构建 Windows 版本：`DOTNET_BIN=/path/to/dotnet zsh build-windows.sh`。输出 `build/windows-x64/DisplayInputSwitch.exe`。构建产物、本地 SDK、日志和 IDE 生成目录不入 Git。
 
-已验证：Swift / .NET 配置校验与往返序列化、旧配置迁移、亮度范围和比例换算、无效控制计划拒绝、DDC 报文及响应校验、EDID 序列号解析、Windows 启动命令路径引用、快捷键冲突与旧配置迁移、亮度步长边界、HDR 路由、Win32 结构布局、macOS 应用编译和 Windows x64 发布。当前两台 Dell 的 macOS DDC 寄存器读写和回读已验证，但 HDR 下物理亮度不变。软件遮罩已用双屏白色测试窗口和屏幕像素采样验证实际变暗及 100% 恢复；单屏、联动、缺失目标整组拒绝已验证。Mac 两屏当前 HDR 状态已读到开启并选择软件调暗；录制、Esc 取消和保存快捷键、Finder 前台时全局调亮/调暗/恢复、单屏快捷键、菜单栏一条/两条滑块均已验证。
+已验证：Swift / .NET 配置校验与往返序列化、旧配置迁移、亮度范围和比例换算、无效控制计划拒绝、DDC 报文及响应校验、EDID 序列号解析、Windows 启动命令路径引用、快捷键冲突与旧配置迁移、亮度步长边界、HDR 路由、Win32 结构布局、macOS 应用编译和 Windows x64 发布。当前两台 Dell 的 macOS DDC 寄存器读写和回读已验证，但 HDR 下物理亮度不变。软件遮罩已用双屏白色测试窗口和屏幕像素采样验证实际变暗及 100% 恢复；单屏、联动、缺失目标整组拒绝已验证。Mac 亮度浮层已验证目标变化、窗口复用、鼠标穿透、不抢焦点与自动消失；亮度键事件解析及模拟按下/松开通过测试。连续 12 次调暗从双屏 100% 到 40%，30 次界面采样中滑块未禁用、布局保持固定。应用本身尚未获辅助功能权限，实体顶部亮度键待授权后确认。Mac 两屏当前 HDR 状态已读到开启并选择软件调暗；录制、Esc 取消和保存快捷键、Finder 前台时全局调亮/调暗/恢复、单屏快捷键、菜单栏一条/两条滑块均已验证。
 
 未验证：Windows GUI / DXVA2 / 软件遮罩实机、HDR 视频和独占全屏、此次新版完整双屏输入源切换。原先切换后黑屏且 OSD 不显示的问题，在显示器恢复出厂设置后已由使用者确认消失。开机启动已验证系统注册状态，未重启或注销测试。
 
@@ -108,4 +112,11 @@ MonitorControl 遮罩调暗实现基于 [MonitorControl](https://github.com/Moni
 ```sh
 xcrun swiftc Sources/Configuration.swift Sources/SoftwareDimming.swift Tests/SoftwareDimming/main.swift -o build/software-dimming-check
 build/software-dimming-check
+```
+
+可选 macOS 亮度提示与功能键检查（短暂显示浮层；不调节亮度、不请求系统权限）：
+
+```sh
+xcrun swiftc -parse-as-library Sources/Configuration.swift Sources/BrightnessHUD.swift Sources/BrightnessKeys.swift Tests/BrightnessFeedback/main.swift -o build/brightness-feedback-check
+build/brightness-feedback-check
 ```

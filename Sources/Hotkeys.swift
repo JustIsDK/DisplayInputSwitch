@@ -96,6 +96,14 @@ struct ShortcutSettings: View {
                 }.pickerStyle(.segmented)
                 Text("联动滑块显示第一台屏幕的值，应用时将所有屏幕设为相同比例。改变显示方式不会自动修改亮度。").font(.caption).foregroundStyle(.secondary)
                 Divider()
+                Toggle("使用键盘顶部亮度键", isOn: Binding(get: { model.brightnessKeysEnabled }, set: { model.setBrightnessKeysEnabled($0) }))
+                Text("仅作用于本机，立即生效。联动时调全部屏幕，分开时调鼠标所在屏幕；不接管内置屏幕或其他功能键。使用太阳图标对应的功能键；若系统将顶排设为 F1、F2，请配合 Fn。").font(.caption).foregroundStyle(.secondary)
+                Text(model.brightnessKeysStatus).font(.callout)
+                if model.brightnessKeysEnabled {
+                    Button("打开辅助功能权限设置…") { model.openBrightnessKeyPermissions() }
+                    Text("同类工具同时接管亮度键时可能冲突，建议仅在一个工具中启用。").font(.caption).foregroundStyle(.secondary)
+                }
+                Divider()
                 Toggle("启用全局快捷键", isOn: $model.config.shortcutsEnabled)
                 Stepper("每次调亮 / 调暗：\(model.config.brightnessStep)%", value: $model.config.brightnessStep, in: 1...20)
                 Text("亮度快捷键跟随当前调光方式。点击按键框后按下组合键，Esc 取消；清除可禁用单项。保存后在所有应用中生效。").font(.callout).foregroundStyle(.secondary)
