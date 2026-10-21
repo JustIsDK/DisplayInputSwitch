@@ -59,12 +59,14 @@ import AppKit
             }
         }
     }
-    private func enforceGammaActivity(displayID: CGDirectDisplayID) {
+    private func moveGammaActivityEnforcer(displayID: CGDirectDisplayID) {
         guard let screen = NSScreen.screens.first(where: {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
         }) else { return }
         gammaActivityEnforcer.setFrameOrigin(screen.frame.origin)
         gammaActivityEnforcer.orderFrontRegardless()
+    }
+    private func enforceGammaActivity() {
         gammaActivityEnforcer.alphaValue = gammaActivityEnforcer.alphaValue == 0.01 ? 0.02 : 0.01
     }
     private func restoreGamma(_ id: String, displayID: CGDirectDisplayID) {
@@ -91,8 +93,9 @@ import AppKit
                 continue
             }
             if gammaIDs.contains(id), let state = baseGamma(for: id, displayID: displayID.uint32Value) {
-                enforceGammaActivity(displayID: displayID.uint32Value)
+                moveGammaActivityEnforcer(displayID: displayID.uint32Value)
                 if setGamma(state, displayID: displayID.uint32Value, percent: percent) {
+                enforceGammaActivity()
                 shades.removeValue(forKey: id)?.close()
                 gammaDisplays.insert(id)
                 levels[id] = percent

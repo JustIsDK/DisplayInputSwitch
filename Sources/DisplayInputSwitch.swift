@@ -113,7 +113,7 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.9")
+        record("启动显示器切换 2.10")
         Task { await refresh() }
     }
     func brightnessKeyTargets() -> [String] {
@@ -350,9 +350,9 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
             guard generation == brightnessGeneration else { return }
             if !soft.isEmpty {
                 let softIDs = zip(serials,ids).filter { soft.contains($0.0) }.map { $0.1 }
-                let gammaIDs = Set(zip(serials, ids).filter { serial, _ in
-                    soft.contains(serial) && displays.first { $0.serial == serial }?.hdr != true
-                }.map { $0.1 })
+                // MonitorControl uses Gamma for physical external displays even when HDR is enabled;
+                // reserve the shade for displays where the transfer table is unavailable.
+                let gammaIDs = Set(zip(serials, ids).filter { soft.contains($0.0) }.map { $0.1 })
                 try dimming.apply(softIDs, percent: percent, gammaIDs: gammaIDs)
                 for serial in soft { levels[serial] = percent; levelErrors.removeValue(forKey: serial) }
                 status = (hard.isEmpty ? "" : status + "\n") + "软件亮度 \(percent)%（不更改 HDR）"; record(status)
