@@ -2,6 +2,8 @@
 
 macOS 菜单栏、Windows 托盘工具。通过 DDC/CI 切换多台显示器的输入源，支持可编辑组别、亮度调节、全局快捷键、配置导入导出和本地日志。
 
+macOS 应用、Windows 程序和托盘使用统一的双显示器切换图标。Windows 设置窗口采用浅色界面，提供带图标的导航、分区标题和统一的按钮、表格样式；亮度行与快捷键表格随窗口宽度调整，保留原生键盘操作与高对比度系统配色。
+
 ## 默认组别
 
 | 组别 | QX 视频 | QE 视频 |
@@ -70,6 +72,8 @@ dotnet publish Windows/DisplayInputSwitch.csproj -c Release -r win-x64 --self-co
 ```
 
 也可在 macOS 交叉构建 Windows 版本：`DOTNET_BIN=/path/to/dotnet zsh build-windows.sh`。输出 `build/windows-x64/DisplayInputSwitch.exe`。构建产物、本地 SDK、日志和 IDE 生成目录不入 Git。
+
+图标源文件为 [Assets/AppIcon.svg](Assets/AppIcon.svg)，`.icns`、`.ico` 和预览 PNG 已随源码提供。修改后可在 macOS 上运行 `python3 scripts/build-icons.py` 重新生成，需要系统自带的 `sips`、`iconutil` 与 ImageMagick；普通应用构建直接使用现有图标文件。
 
 已验证：Swift / .NET 配置校验与往返序列化、旧配置迁移、亮度范围和比例换算、无效控制计划拒绝、DDC 报文及响应校验、EDID 序列号解析、Windows 启动命令路径引用、快捷键冲突与旧配置迁移、亮度步长边界、HDR 路由、Win32 结构布局、macOS 应用编译和 Windows x64 发布。当前两台 Dell 的 macOS DDC 寄存器读写和回读已验证，但 HDR 下物理亮度不变。软件遮罩已用双屏白色测试窗口和屏幕像素采样验证实际变暗及 100% 恢复；单屏、联动、缺失目标整组拒绝已验证。Mac 亮度浮层已验证目标变化、窗口复用、鼠标穿透、不抢焦点与自动消失；亮度键事件解析及模拟按下/松开通过测试。连续 12 次调暗从双屏 100% 到 40%，30 次界面采样中滑块未禁用、布局保持固定。应用本身尚未获辅助功能权限，实体顶部亮度键待授权后确认。Mac 两屏当前 HDR 状态已读到开启并选择软件调暗；录制、Esc 取消和保存快捷键、Finder 前台时全局调亮/调暗/恢复、单屏快捷键、菜单栏一条/两条滑块均已验证。
 

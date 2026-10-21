@@ -60,7 +60,13 @@ internal sealed class SwitchForm : Form {
     string ConfigPath => Path.Combine(folder, "config.json");
     string LogPath => Path.Combine(folder, "switch.log");
     public SwitchForm() {
-        Text = "显示器切换"; Size = new Size(860, 720); MinimumSize = new Size(760, 620); AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96, 96); AutoScaleMode = AutoScaleMode.Dpi;
+        Text = "显示器切换"; Font = new Font("Microsoft YaHei UI", 9.5f);
+        Size = new Size(1020, 780); MinimumSize = new Size(920, 660); StartPosition = FormStartPosition.CenterScreen;
+        BackColor = Appearance.Canvas;
+        using (var iconStream = Assembly.GetExecutingAssembly().GetManifestResourceStream("DisplayInputSwitch.AppIcon.ico")) {
+            if (iconStream != null) { using var source = new Icon(iconStream); Icon = (Icon)source.Clone(); }
+        }
         Directory.CreateDirectory(folder);
         string? loadError = null;
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("DisplayInputSwitch.default.json") ?? throw new Exception("缺少默认配置。");
@@ -135,7 +141,8 @@ internal sealed class SwitchForm : Form {
         monitorPage.Controls.Add(monitors); tabs.TabPages.Add(monitorPage);
         var logPage = new TabPage("日志"); logPage.Controls.Add(log); tabs.TabPages.Add(logPage);
         grid.DataError += (_, e) => { e.ThrowException = false; SetStatus("组别字段值无效，请重新选择。"); };
-        tray.Text = "显示器切换"; tray.Icon = SystemIcons.Application; tray.ContextMenuStrip = menu; tray.Visible = true;
+        InitializeAppearance();
+        tray.Text = "显示器切换"; tray.Icon = Icon; tray.ContextMenuStrip = menu; tray.Visible = true;
         tray.DoubleClick += (_, _) => ShowSettings();
         FormClosing += (_, e) => { e.Cancel = true; Hide(); };
         BuildGrid(); RegisterKeys(); BuildMenu();
@@ -150,7 +157,33 @@ internal sealed class SwitchForm : Form {
             if (softwareDimming) _ = Run(LoadBrightness, brightness: true);
         })); } catch (InvalidOperationException) { }
     }
-    static FlowLayoutPanel Flow() => new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, Padding = new Padding(8) };
+    static FlowLayoutPanel Flow() => Appearance.Flow();
+    void InitializeAppearance() {
+        string[] titles = ["通用设置", "输入源组别", "亮度调节", "状态栏与快捷键", "已连接的显示器", "运行日志"];
+        string[] descriptions = ["设置本机启动方式，关闭窗口后继续在托盘运行。", "为每台电脑配置一组输入源，一次切换多台显示器。", "按显示器独立调节，也可以同时调整所有屏幕。", "选择托盘滑块布局，并为常用操作设置全局快捷键。", "读取当前连接、输入源与显示器身份。", "查看操作结果、DDC 回读和错误详情。"];
+        for (int i = 0; i < tabs.TabPages.Count; i++) {
+            var page = tabs.TabPages[i]; page.Padding = new Padding(8);
+            page.Controls.Add(Appearance.Heading(titles[i], descriptions[i]));
+        }
+        Appearance.Style(this);
+        Appearance.Tabs(tabs, navigation: true); Appearance.Tabs(brightnessTabs, navigation: false);
+        var header = new Panel { Dock = DockStyle.Top, Height = 96, Padding = new Padding(24, 16, 24, 16), BackColor = Appearance.Canvas };
+        var image = new PictureBox { Image = Icon?.ToBitmap(), SizeMode = PictureBoxSizeMode.Zoom,
+            Dock = DockStyle.Left, Width = 56, TabStop = false };
+        image.Disposed += (_, _) => image.Image?.Dispose();
+        var text = new Panel { Dock = DockStyle.Fill, Padding = new Padding(16, 0, 0, 0) };
+        text.Controls.Add(new Label { Text = "输入源 · 亮度 · 全局快捷键", Dock = DockStyle.Fill, ForeColor = Appearance.Muted });
+        text.Controls.Add(new Label { Text = "显示器切换", Dock = DockStyle.Top, Height = 36,
+            Font = new Font(Font.FontFamily, 19, FontStyle.Bold), ForeColor = Appearance.Ink });
+        header.Controls.Add(text); header.Controls.Add(image);
+        Controls.Add(header);
+        status.Height = 84; status.Padding = new Padding(24, 12, 24, 12);
+        status.BackColor = Appearance.Canvas; status.ForeColor = Appearance.Ink;
+        status.AccessibleName = "运行状态";
+        log.Font = new Font("Consolas", 10); log.BorderStyle = BorderStyle.None;
+        log.BackColor = Appearance.Surface; log.ForeColor = Appearance.Ink;
+        menu.Font = Font; menu.ShowImageMargin = false;
+    }
     void RefreshLoginStatus() {
         try {
             launchAtLogin.Checked = Startup.IsRegistered();
@@ -175,19 +208,23 @@ internal sealed class SwitchForm : Form {
         brightnessPanel.Controls.Add(Button("读取当前亮度", () => _ = Run(RefreshBrightness, brightness: true)));
         brightnessPanel.SetFlowBreak(brightnessPanel.Controls[^1], true);
         brightnessPanel.Controls.Add(new Label { Text = softwareDimming ? "联动将所有屏幕设置为相同比例。软件遮罩方案来自 MonitorControl；其他工具的调暗效果会叠加。独占全屏、受保护视频和系统安全界面可能不受影响。" : "联动滑块显示第一台屏幕的值，应用时设为相同比例。工具不会自动修改 HDR。", AutoSize = true, MaximumSize = new Size(700, 0) });
+        Appearance.Style(brightnessPanel);
     }
     void AddBrightnessControl(string name, string[] serials) {
-        var row = new FlowLayoutPanel { AutoSize = true, Width = 700, MaximumSize = new Size(700, 0), Margin = new Padding(0,12,0,12) };
+        var row = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Width = 700,
+            ColumnCount = 2, RowCount = 3, Margin = new Padding(0, 12, 0, 16), Padding = new Padding(0, 8, 0, 8) };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         var title = new Label { Text = name, AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
         var value = new Label { Text = "未读取", AutoSize = true, MaximumSize = new Size(650, 0) };
-        var slider = new TrackBar { Minimum = MinimumBrightness(serials), Maximum = 100, TickFrequency = 10, Width = 550, AccessibleName = name + "亮度", Enabled = false };
+        var slider = new TrackBar { Minimum = MinimumBrightness(serials), Maximum = 100, Dock = DockStyle.Fill, AccessibleName = name + "亮度", Enabled = false };
         var apply = Button("应用", () => ApplyBrightness(serials, slider.Value)); apply.Enabled = false;
         slider.ValueChanged += (_, _) => value.Text = slider.Value + "%";
         slider.MouseUp += (_, e) => { if (e.Button == MouseButtons.Left && slider.Enabled) ApplyBrightness(serials, slider.Value); };
         slider.KeyUp += (_, e) => { if (e.KeyCode is Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.Home or Keys.End or Keys.PageUp or Keys.PageDown) ApplyBrightness(serials, slider.Value); };
-        row.Controls.Add(title); row.SetFlowBreak(title, true);
-        row.Controls.Add(value); row.SetFlowBreak(value, true);
-        row.Controls.Add(slider); row.Controls.Add(apply);
+        title.Tag = "heading";
+        row.Controls.Add(title, 0, 0); row.SetColumnSpan(title, 2);
+        row.Controls.Add(value, 0, 1); row.SetColumnSpan(value, 2);
+        row.Controls.Add(slider, 0, 2); row.Controls.Add(apply, 1, 2);
         brightnessPanel.Controls.Add(row); brightnessPanel.SetFlowBreak(row, true);
         brightnessControls.Add((serials, slider, value, apply));
     }
@@ -207,7 +244,7 @@ internal sealed class SwitchForm : Form {
             c.Value.Text = name + (available ? "  " + c.Slider.Value + "%" : " · 不可用");
         }
     }
-    static Button Button(string text, Action action) { var b = new Button { Text = text, AutoSize = true, Margin = new Padding(4,8,4,8) }; b.Click += (_, _) => action(); return b; }
+    static Button Button(string text, Action action) { var b = new Button { Text = text, AutoSize = true }; Appearance.Style(b); b.Click += (_, _) => action(); return b; }
     void ShowSettings() { Show(); WindowState = FormWindowState.Normal; Activate(); }
     void BuildGrid() {
         grid.Columns.Clear(); grid.Rows.Clear();

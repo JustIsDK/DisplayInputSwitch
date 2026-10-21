@@ -9,8 +9,10 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>DisplayInputSwitch</AssemblyName>
-    <Version>2.10.0</Version>
+    <ApplicationIcon>../Assets/AppIcon.ico</ApplicationIcon>
+    <Version>2.11.0</Version>
   </PropertyGroup>
   <ItemGroup><EmbeddedResource Include="../Shared/default.json" Link="default.json" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../Assets/AppIcon.ico" LogicalName="DisplayInputSwitch.AppIcon.ico" /></ItemGroup>
   <ItemGroup><None Include="../vendor/MonitorControl/LICENSE" Link="MonitorControl-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
 </Project>

@@ -113,7 +113,7 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.10")
+        record("启动显示器切换 2.11")
         Task { await refresh() }
     }
     func brightnessKeyTargets() -> [String] {
