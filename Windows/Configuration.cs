@@ -14,6 +14,7 @@ public sealed class SwitchGroup {
     public string Name { get; set; } = "新组别";
     public List<Assignment> Displays { get; set; } = [];
     public int Shortcut { get; set; }
+    public int SwitchDelayMs { get; set; } = 2000;
 }
 public sealed class Configuration {
     public int Version { get; set; }
@@ -42,6 +43,7 @@ public sealed class Configuration {
         Require(Groups.Select(g => g.Id).Distinct().Count() == Groups.Count, "组别标识重复。");
         var keys = new HashSet<int>();
         foreach (var g in Groups) {
+            Require(g.SwitchDelayMs is >= 0 and <= 10000, "切换间隔须为 0–10000 毫秒。");
             Require(g.Shortcut is >= 0 and <= 9 && (g.Shortcut == 0 || keys.Add(g.Shortcut)), "快捷键无效或重复。");
             Require(g.Displays.All(a => a != null && serials.Contains(a.Serial) && IsSource(a.Input)) && g.Displays.Select(a => a.Serial).Distinct().Count() == g.Displays.Count, "组内显示器或输入源无效。");
         }

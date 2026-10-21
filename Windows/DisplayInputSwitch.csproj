@@ -10,7 +10,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>DisplayInputSwitch</AssemblyName>
     <ApplicationIcon>../Assets/AppIcon.ico</ApplicationIcon>
-    <Version>2.11.0</Version>
+    <Version>2.12.0</Version>
   </PropertyGroup>
   <ItemGroup><EmbeddedResource Include="../Shared/default.json" Link="default.json" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="../Assets/AppIcon.ico" LogicalName="DisplayInputSwitch.AppIcon.ico" /></ItemGroup>

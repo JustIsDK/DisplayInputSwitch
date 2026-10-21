@@ -122,8 +122,9 @@ internal static class Ddc {
         try { return monitors.Select(m => { int v = Read(m, 0x10, out int max); return new BrightnessReading(m.Serial, m.Name, v, max); }).ToList(); }
         finally { monitors.ForEach(m => m.Dispose()); }
     }
-    public static List<Outcome> Apply(List<Operation> ops) {
+    public static List<Outcome> Apply(List<Operation> ops, int switchDelayMs = 0) {
         Operation.Validate(ops);
+        if (switchDelayMs is < 0 or > 10000) throw new ArgumentOutOfRangeException(nameof(switchDelayMs));
         var monitors = Open();
         try {
             var plan = ops.Select(o => (Op: o, Monitor: Find(monitors, o.Serial))).ToList();
@@ -136,7 +137,11 @@ internal static class Ddc {
                 } else targets[o.Serial] = o.Input!.Value;
             }
             var errors = new Dictionary<string, string>();
-            foreach (var (o,m) in plan) if (!Write(m, o.Brightness != null ? (byte)0x10 : (byte)0x60, targets[o.Serial])) errors[o.Serial] = "DDC 发送失败，可能部分执行；请检测后重试。";
+            // Retain preflighted handles while input changes alter the desktop topology.
+            SwitchSequence.Send(plan.Count, switchDelayMs, i => {
+                var (o,m) = plan[i];
+                if (!Write(m, o.Brightness != null ? (byte)0x10 : (byte)0x60, targets[o.Serial])) errors[o.Serial] = "DDC 发送失败，可能部分执行；请检测后重试。";
+            }, Thread.Sleep);
             Thread.Sleep(600);
             var outcomes = new List<Outcome>();
             foreach (var (o,m) in plan) {

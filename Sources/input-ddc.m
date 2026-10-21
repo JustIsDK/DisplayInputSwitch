@@ -51,6 +51,13 @@ static BOOL validOperation(id o) {
     return o[@"input"] ? integer(o[@"input"],0,255) && source([o[@"input"] intValue]) : integer(o[@"brightness"],0,100);
 }
 static int brightnessRaw(int percent, int maximum) { return (percent*maximum+50)/100; }
+// Keep all transports open; re-enumerating after the first switch can lose the remaining targets.
+static void sendPlan(NSUInteger count, int delayMs, void (^send)(NSUInteger), void (^wait)(int)) {
+    for(NSUInteger j=0;j<count;j++) {
+        if(j>0 && delayMs>0) wait(delayMs);
+        send(j);
+    }
+}
 static void selfTest(void) {
     const uint8_t expected[]={0x82,1,0x60,0xdc};
     assert([packet(0x60,-1) isEqualToData:[NSData dataWithBytes:expected length:4]]);
@@ -78,13 +85,25 @@ static void selfTest(void) {
     assert(!validOperation(@{@"serial":@"a",@"input":@15,@"usbMask":@1}));
     assert(!validOperation(@{@"serial":@"a"}));
     assert(brightnessRaw(0,255)==0 && brightnessRaw(50,255)==128 && brightnessRaw(100,65535)==65535);
+    NSMutableArray *events=[NSMutableArray array];
+    sendPlan(3,2000,^(NSUInteger j) { [events addObject:@(j)]; },^(int ms) { [events addObject:@(ms)]; });
+    assert(([events isEqual:@[@0,@2000,@1,@2000,@2]]));
+    [events removeAllObjects];
+    sendPlan(1,2000,^(NSUInteger j) { [events addObject:@(j)]; },^(int ms) { assert(NO); });
+    assert([events isEqual:@[@0]]);
+    sendPlan(2,0,^(NSUInteger j) {},^(int ms) { assert(NO); });
 }
 int main(int argc,const char *argv[]) {
  @autoreleasepool {
     if(argc==2 && !strcmp(argv[1],"--self-test")) { selfTest(); return emit(@{@"ok":@YES},0); }
     NSString *cmd=argc>1 ? @(argv[1]) : @"";
     BOOL list=[cmd isEqual:@"list"], batch=[cmd isEqual:@"batch"], read=[cmd isEqual:@"get"], brightness=[cmd isEqual:@"brightness-get"];
-    if(!(list&&argc==2) && !(batch&&argc==3) && !((read||brightness)&&argc==3)) return fail(@"用法：list | get <serial/UUID> | brightness-get <serial/UUID> | batch <JSON>");
+    if(!(list&&argc==2) && !(batch&&(argc==3||argc==4)) && !((read||brightness)&&argc==3)) return fail(@"用法：list | get <serial/UUID> | brightness-get <serial/UUID> | batch <JSON> [间隔毫秒]");
+    int delayMs=0;
+    if(batch && argc==4) {
+        NSScanner *scanner=[NSScanner scannerWithString:@(argv[3])];
+        if(![scanner scanInt:&delayMs] || !scanner.isAtEnd || delayMs<0 || delayMs>10000) return fail(@"切换间隔须为 0–10000 毫秒。");
+    }
     NSArray *operations=nil;
     if(batch) {
         id obj=[NSJSONSerialization JSONObjectWithData:[@(argv[2]) dataUsingEncoding:NSUTF8StringEncoding] options:0 error:NULL];
@@ -132,12 +151,13 @@ int main(int argc,const char *argv[]) {
         } else targets[j]=[operations[j][@"input"] intValue];
     }
     if(preflight) {
-        for(NSUInteger j=0;j<operations.count;j++) {
+        DDCTransport *transportPlan=transports; int *targetPlan=targets;
+        sendPlan(operations.count,delayMs,^(NSUInteger j) {
             BOOL isBrightness=operations[j][@"brightness"]!=nil;
-            BOOL sent=sendPacket(transports[j],packet(isBrightness?0x10:0x60,targets[j]));
+            BOOL sent=sendPacket(transportPlan[j],packet(isBrightness?0x10:0x60,targetPlan[j]));
             results[j][isBrightness?@"brightnessSent":@"videoSent"]=@(sent);
             if(!sent) results[j][@"error"]=@"DDC 发送失败，可能部分执行；请检测后重试。";
-        }
+        },^(int ms) { usleep((useconds_t)ms*1000); });
         usleep(600000);
         for(NSUInteger j=0;j<operations.count;j++) {
             BOOL isBrightness=operations[j][@"brightness"]!=nil;

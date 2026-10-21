@@ -16,7 +16,7 @@ struct Reply: Decodable {
     let results: [Outcome]?
     let error: String?
 }
-func runHelper(_ arguments: [String]) async throws -> Reply {
+func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws -> Reply {
     try await withCheckedThrowingContinuation { continuation in
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process(), pipe = Pipe()
@@ -28,7 +28,7 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
             do {
                 try process.run()
                 let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: timeout)
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit(); timeout.cancel()
                 guard process.terminationReason == .exit else { throw ConfigError(message: "DDC 请求超时；可能已部分执行，请检测后重试。") }
@@ -113,7 +113,7 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.11")
+        record("启动显示器切换 2.12")
         Task { await refresh() }
     }
     func brightnessKeyTargets() -> [String] {
@@ -267,9 +267,10 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         status = "已恢复原画面（取消本工具的软件调暗）"; record(status)
         showBrightnessHUD(config.monitors.map(\.serial).filter(usesSoftware))
     }
-    func execute(_ operations: [Operation], title: String) async throws {
+    func execute(_ operations: [Operation], title: String, switchDelayMs: Int = 0) async throws {
         let json = String(data: try JSONEncoder().encode(operations), encoding: .utf8)!
-        let reply = try await runHelper(["batch",json])
+        let reply = try await runHelper(["batch",json,String(switchDelayMs)],
+            timeoutSeconds: 15 + Double(switchDelayMs * max(0, operations.count - 1)) / 1000)
         guard let results = reply.results, results.count == operations.count else { throw ConfigError(message: "切换结果不完整；请重新检测。") }
         var lines = [title]
         for r in results {
@@ -294,11 +295,21 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     }
     func apply(_ group: SwitchGroup) async {
         guard !busy else { return }; busy = true; defer { busy = false }
-        status = "正在切到 \(group.name)…"
+        status = "正在切到 \(group.name)…（逐台间隔 \(group.switchDelayMs) 毫秒）"
         do {
             try config.validate()
             let ops = group.displays.map { Operation(serial: $0.serial, input: $0.input) }
-            try await execute(ops, title: group.name)
+            try await execute(ops, title: "\(group.name) · 间隔 \(group.switchDelayMs) 毫秒", switchDelayMs: group.switchDelayMs)
+        } catch { status = error.localizedDescription; record(status) }
+    }
+    func switchInput(_ serial: String, to input: Int) async {
+        guard !busy else { return }; busy = true; defer { busy = false }
+        do {
+            guard let monitor = config.monitors.first(where: { $0.serial == serial }), [15,17,27].contains(input) else {
+                throw ConfigError(message: "显示器或输入源无效。")
+            }
+            status = "正在切换 \(monitor.name) → \(sourceName(input))…"
+            try await execute([Operation(serial: serial, input: input)], title: "单独切换 \(monitor.name)")
         } catch { status = error.localizedDescription; record(status) }
     }
     private func finishBrightness() {
@@ -380,6 +391,20 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
     }
 }
 
+struct InputSwitchControl: View {
+    @ObservedObject var model: SwitchModel
+    let serial: String
+    let name: String
+    @State private var input = 27
+    var body: some View {
+        HStack {
+            Picker("\(name) 目标输入源", selection: $input) {
+                ForEach([27,15,17], id: \.self) { Text(sourceName($0)).tag($0) }
+            }
+            Button("切换") { Task { await model.switchInput(serial, to: input) } }
+        }.disabled(model.blocksInteraction)
+    }
+}
 struct BrightnessControl: View {
     @ObservedObject var model: SwitchModel
     let serials: [String]
@@ -479,12 +504,23 @@ struct SwitchView: View {
                                             ForEach([27,15,17], id: \.self) { Text(sourceName($0)).tag($0) }
                                         }
                                     }
+                                    HStack {
+                                        Text("切换间隔")
+                                        TextField("毫秒", value: $group.switchDelayMs, format: .number.grouping(.never))
+                                            .frame(width: 80).accessibilityLabel("切换间隔（毫秒）")
+                                        Text("毫秒")
+                                        Stepper("调整切换间隔", value: $group.switchDelayMs, in: 0...10000, step: 100).labelsHidden()
+                                    }
+                                    Text("0–10000 毫秒；顺序：" + group.displays.map { a in model.config.monitors.first { $0.serial == a.serial }?.name ?? a.serial }.joined(separator: " → "))
+                                        .font(.caption).foregroundStyle(.secondary)
                                 }.padding(6)
                             }
                         }
                         Button("添加组别") {
                             model.config.groups.append(.init(id: UUID().uuidString, name: "新组别", displays: model.config.monitors.map { .init(serial: $0.serial, input: 27) }, shortcut: 0))
                         }.disabled(model.config.groups.count >= 9)
+                        Text("默认逐台间隔 2000 毫秒，0 表示不额外等待。保存后菜单和快捷键生效。")
+                            .font(.callout).foregroundStyle(.secondary)
                         Toggle("启用全局快捷键", isOn: $model.config.shortcutsEnabled)
                         Text(model.shortcutStatus).font(.callout).foregroundStyle(.secondary)
                         HStack { Button("保存配置") { model.save() }; Button("导入 JSON…") { model.importConfig() }; Button("导出 JSON…") { model.exportConfig() } }
@@ -509,6 +545,7 @@ struct SwitchView: View {
                             Spacer()
                             Text(model.readings[model.config.monitors[i].serial].map(sourceName) ?? "不可见 / 未读取")
                         }
+                        InputSwitchControl(model: model, serial: model.config.monitors[i].serial, name: model.config.monitors[i].name)
                     }
                     Divider()
                     Text("已检测到") .font(.headline)
@@ -546,6 +583,16 @@ struct MenuPanel: View {
                     HStack { Text(g.name); Spacer(); if model.config.shortcutsEnabled { Text(Hotkeys.label(model.binding(for: "group:" + g.id))).foregroundStyle(.secondary) } }.frame(maxWidth: .infinity)
                 }.disabled(model.blocksInteraction)
             }
+            Divider()
+            Menu("单独切换输入源") {
+                ForEach(model.config.monitors) { m in
+                    Menu(m.name) {
+                        ForEach([27,15,17], id: \.self) { input in
+                            Button(sourceName(input)) { Task { await model.switchInput(m.serial, to: input) } }
+                        }
+                    }
+                }
+            }.disabled(model.blocksInteraction)
             Divider()
             Text(model.brightnessMode == "auto" ? "自动亮度 · 按每屏 HDR 状态" : model.softwareDimming ? "软件亮度 · HDR" : "硬件亮度 · SDR").font(.caption).foregroundStyle(.secondary)
             if model.config.menuBrightnessLinked {

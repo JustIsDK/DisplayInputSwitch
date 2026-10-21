@@ -11,6 +11,19 @@ struct SwitchGroup: Codable, Identifiable, Equatable {
     var name: String
     var displays: [Assignment]
     var shortcut: Int
+    var switchDelayMs = 2000
+
+    init(id: String, name: String, displays: [Assignment], shortcut: Int, switchDelayMs: Int = 2000) {
+        self.id = id; self.name = name; self.displays = displays; self.shortcut = shortcut; self.switchDelayMs = switchDelayMs
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        displays = try c.decode([Assignment].self, forKey: .displays)
+        shortcut = try c.decode(Int.self, forKey: .shortcut)
+        switchDelayMs = try c.decodeIfPresent(Int.self, forKey: .switchDelayMs) ?? 2000
+    }
 }
 struct Configuration: Codable, Equatable {
     var version: Int
@@ -36,6 +49,7 @@ struct Configuration: Codable, Equatable {
         try require(!groups.isEmpty && groups.count <= 9 && Set(groups.map(\.id)).count == groups.count, "组别须为 1–9 个，标识不能重复。")
         var keys = Set<Int>()
         for g in groups {
+            try require((0...10000).contains(g.switchDelayMs), "切换间隔须为 0–10000 毫秒。")
             try require(!g.id.isEmpty && !g.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "组名不能为空。")
             try require((0...9).contains(g.shortcut), "快捷键须为 0–9，0 表示关闭。")
             if g.shortcut != 0 { try require(keys.insert(g.shortcut).inserted, "组别快捷键不能重复。") }

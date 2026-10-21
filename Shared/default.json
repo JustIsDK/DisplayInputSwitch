@@ -14,7 +14,8 @@
       ],
       "id" : "mac1",
       "name" : "Mac 1",
-      "shortcut" : 1
+      "shortcut" : 1,
+      "switchDelayMs" : 2000
     },
     {
       "displays" : [
@@ -29,7 +30,8 @@
       ],
       "id" : "mac2",
       "name" : "Mac 2",
-      "shortcut" : 2
+      "shortcut" : 2,
+      "switchDelayMs" : 2000
     },
     {
       "displays" : [
@@ -44,7 +46,8 @@
       ],
       "id" : "windows",
       "name" : "Windows",
-      "shortcut" : 3
+      "shortcut" : 3,
+      "switchDelayMs" : 2000
     }
   ],
   "hotkeys" : [

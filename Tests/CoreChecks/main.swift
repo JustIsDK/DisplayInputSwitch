@@ -13,6 +13,13 @@ try c.validate()
 let data = try JSONEncoder().encode(c)
 let decoded = try JSONDecoder().decode(Configuration.self, from: data)
 assert(decoded == c)
+assert(c.groups.allSatisfy { $0.switchDelayMs == 2000 })
+var delayed = c
+delayed.groups[0].switchDelayMs = 0; delayed.groups[1].switchDelayMs = 10000
+let delayedCopy = try JSONDecoder().decode(Configuration.self, from: JSONEncoder().encode(delayed))
+assert(delayedCopy == delayed)
+rejected { $0.groups[0].switchDelayMs = -1 }
+rejected { $0.groups[0].switchDelayMs = 10001 }
 rejected { $0.groups[1].shortcut = 1 }
 rejected { $0.groups[0].displays[0].input = 16 }
 rejected { $0.monitors[1].serial = $0.monitors[0].serial }
@@ -24,6 +31,7 @@ groups[0]["name"] = "自定义 Mac"; groups[0]["shortcut"] = 8; legacy["groups"]
 let migrated = try JSONDecoder().decode(Configuration.self, from: JSONSerialization.data(withJSONObject: legacy))
 try migrated.validate()
 assert(migrated.version == 3 && migrated.groups[0].name == "自定义 Mac" && migrated.groups[0].shortcut == 8)
+assert(migrated.groups.allSatisfy { $0.switchDelayMs == 2000 })
 assert(migrated.groups[1].displays == c.groups[1].displays && migrated.monitors == c.monitors)
 let exported = String(data: try JSONEncoder().encode(migrated), encoding: .utf8)!
 assert(!exported.contains("usb"))
@@ -38,6 +46,8 @@ for (current, maximum) in [(-1,100),(101,100),(0,0),(0,65536)] {
 }
 let operation = try JSONSerialization.jsonObject(with: JSONEncoder().encode(Operation(serial: "test", brightness: 35))) as! [String: Any]
 assert(operation["input"] == nil && operation["brightness"] as? Int == 35)
+let single = try JSONSerialization.jsonObject(with: JSONEncoder().encode([Operation(serial: "J80FDH3", input: 15)])) as! [[String: Any]]
+assert(single.count == 1 && single[0]["serial"] as? String == "J80FDH3" && single[0]["input"] as? Int == 15 && single[0]["brightness"] == nil)
 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 let full = try softwareOpacity(percent: 100), minimum = try softwareOpacity(percent: 10)
 assert(full == 0 && minimum == 0.9)

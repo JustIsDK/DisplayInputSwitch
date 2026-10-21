@@ -44,6 +44,7 @@ internal sealed class SwitchForm : Form {
     readonly List<(string[] Serials, TrackBar Slider, Label Value, Button Apply)> brightnessControls = [];
     readonly Dictionary<int, string> keyGroups = [];
     readonly FlowLayoutPanel shortcutPanel = Flow();
+    readonly FlowLayoutPanel inputPanel = Flow();
     readonly DataGridView shortcutGrid = new() { Width = 700,Height = 320,ReadOnly = true,AllowUserToAddRows = false,AllowUserToDeleteRows = false,RowHeadersVisible = false,AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
     readonly ComboBox menuLayout = new() { DropDownStyle = ComboBoxStyle.DropDownList,Width = 270 };
     readonly NumericUpDown brightnessStep = new() { Minimum = 1,Maximum = 20,Width = 80 };
@@ -95,7 +96,7 @@ internal sealed class SwitchForm : Form {
         var groupActions = Flow(); groupActions.Dock = DockStyle.Fill;
         groupActions.Controls.Add(Button("添加组别", () => {
             if (grid.Rows.Count >= 9) return;
-            var values = new List<object> { "新组别" }; values.AddRange(config.Monitors.Select(_ => (object)27)); values.Add(0);
+            var values = new List<object> { "新组别" }; values.AddRange(config.Monitors.Select(_ => (object)27)); values.Add(0); values.Add(2000);
             int index = grid.Rows.Add(values.ToArray()); grid.Rows[index].Tag = Guid.NewGuid().ToString();
         }));
         groupActions.Controls.Add(Button("删除选中组别", () => { if (grid.CurrentRow != null && grid.Rows.Count > 1) grid.Rows.Remove(grid.CurrentRow); }));
@@ -106,6 +107,8 @@ internal sealed class SwitchForm : Form {
             if (!SaveFromGridResult()) return;
             var g = config.Groups.First(x => x.Id == id); _ = Run(() => ApplyGroup(g));
         }));
+        groupActions.SetFlowBreak(groupActions.Controls[^1], true);
+        groupActions.Controls.Add(new Label { Text = "切换间隔：0–10000 毫秒，默认 2000。按配置顺序逐台发送；0 表示不额外等待。保存后菜单和快捷键生效。", AutoSize = true });
         groupActions.SetFlowBreak(groupActions.Controls[^1], true);
         groupActions.Controls.Add(enableKeys); groupActions.SetFlowBreak(enableKeys, true);
         groupActions.Controls.Add(shortcuts); groupActions.SetFlowBreak(shortcuts, true);
@@ -135,10 +138,11 @@ internal sealed class SwitchForm : Form {
         var shortcutPage = new TabPage("状态栏与快捷键"); shortcutPage.Controls.Add(shortcutPanel); tabs.TabPages.Add(shortcutPage);
         BuildShortcutSettings();
         var monitorPage = new TabPage("显示器") { Padding = new Padding(12) };
-        var monitors = Flow(); monitors.Controls.Add(Button("检测 / 读取", () => _ = Run(RefreshDisplays)));
+        var monitors = inputPanel; monitors.Controls.Add(Button("检测 / 读取", () => _ = Run(RefreshDisplays)));
         monitors.SetFlowBreak(monitors.Controls[^1], true); monitors.Controls.Add(detected);
         monitors.SetFlowBreak(detected, true); monitors.Controls.Add(new Label { Text = "按 EDID 序列号识别显示器。更换显示器：导出 JSON，修改 monitors、groups 的 serial 后导入。", AutoSize = true, MaximumSize = new Size(700, 0) });
         monitorPage.Controls.Add(monitors); tabs.TabPages.Add(monitorPage);
+        BuildInputControls();
         var logPage = new TabPage("日志"); logPage.Controls.Add(log); tabs.TabPages.Add(logPage);
         grid.DataError += (_, e) => { e.ThrowException = false; SetStatus("组别字段值无效，请重新选择。"); };
         InitializeAppearance();
@@ -158,9 +162,25 @@ internal sealed class SwitchForm : Form {
         })); } catch (InvalidOperationException) { }
     }
     static FlowLayoutPanel Flow() => Appearance.Flow();
+    void BuildInputControls() {
+        foreach (Control row in inputPanel.Controls.Cast<Control>().Where(c => c.Tag as string == "input-row").ToList()) row.Dispose();
+        foreach (var monitor in config.Monitors) {
+            var row = new TableLayoutPanel { Tag = "input-row", AutoSize = true, Width = 700, ColumnCount = 3,
+                Margin = new Padding(0, 12, 0, 8) };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            var name = new Label { Text = monitor.Name + " · " + monitor.Serial, AutoSize = true, Anchor = AnchorStyles.Left };
+            var source = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160, AccessibleName = monitor.Name + "目标输入源",
+                DataSource = new[] { new Choice(27,"USB-C 90W"), new Choice(15,"DP"), new Choice(17,"HDMI") }, DisplayMember = "Name", ValueMember = "Value" };
+            row.Controls.Add(name, 0, 0); row.Controls.Add(source, 1, 0);
+            row.Controls.Add(Button("切换", () => { if (source.SelectedValue is int input) _ = Run(() => SwitchInput(monitor.Serial,input)); }), 2, 0);
+            inputPanel.Controls.Add(row); inputPanel.SetFlowBreak(row, true);
+        }
+        Appearance.Style(inputPanel);
+    }
     void InitializeAppearance() {
         string[] titles = ["通用设置", "输入源组别", "亮度调节", "状态栏与快捷键", "已连接的显示器", "运行日志"];
-        string[] descriptions = ["设置本机启动方式，关闭窗口后继续在托盘运行。", "为每台电脑配置一组输入源，一次切换多台显示器。", "按显示器独立调节，也可以同时调整所有屏幕。", "选择托盘滑块布局，并为常用操作设置全局快捷键。", "读取当前连接、输入源与显示器身份。", "查看操作结果、DDC 回读和错误详情。"];
+        string[] descriptions = ["设置本机启动方式，关闭窗口后继续在托盘运行。", "为每台电脑配置输入源与逐台切换间隔。", "按显示器独立调节，也可以同时调整所有屏幕。", "选择托盘滑块布局，并为常用操作设置全局快捷键。", "单独切换某台显示器，或读取当前连接与输入源。", "查看操作结果、DDC 回读和错误详情。"];
         for (int i = 0; i < tabs.TabPages.Count; i++) {
             var page = tabs.TabPages[i]; page.Padding = new Padding(8);
             page.Controls.Add(Appearance.Heading(titles[i], descriptions[i]));
@@ -251,11 +271,14 @@ internal sealed class SwitchForm : Form {
         grid.Columns.Add("name", "组名");
         foreach (var m in config.Monitors) grid.Columns.Add(new DataGridViewComboBoxColumn { Name = m.Serial, HeaderText = m.Name, DataSource = new[] { new Choice(27,"USB-C 90W"), new Choice(15,"DP"), new Choice(17,"HDMI") }, DisplayMember = "Name", ValueMember = "Value" });
         grid.Columns.Add("shortcut", "快捷键数字 (0–9)");
+        grid.Columns.Add("delay", "切换间隔 (毫秒)");
         foreach (var g in config.Groups) {
             var values = new List<object> { g.Name };
             values.AddRange(config.Monitors.Select(m => (object)(g.Displays.FirstOrDefault(a => a.Serial == m.Serial)?.Input ?? 27)));
             values.Add(g.Shortcut);
+            values.Add(g.SwitchDelayMs);
             int i = grid.Rows.Add(values.ToArray()); grid.Rows[i].Tag = g.Id;
+            grid.Rows[i].Cells["delay"].ToolTipText = "顺序：" + string.Join(" → ", g.Displays.Select(a => config.Monitors.First(m => m.Serial == a.Serial).Name));
         }
         enableKeys.Checked = config.ShortcutsEnabled;
         RefreshShortcutGrid();
@@ -268,8 +291,10 @@ internal sealed class SwitchForm : Form {
             var next = Configuration.Parse(JsonSerializer.Serialize(config, Configuration.Json));
             next.Groups = grid.Rows.Cast<DataGridViewRow>().Select(r => new SwitchGroup {
                 Id = (string)r.Tag!, Name = Convert.ToString(r.Cells[0].Value) ?? "",
-                Displays = config.Monitors.Select((m,i) => new Assignment { Serial = m.Serial, Input = Convert.ToInt32(r.Cells[i+1].Value) }).ToList(),
-                Shortcut = Convert.ToInt32(r.Cells[config.Monitors.Count+1].Value)
+                Displays = (config.Groups.FirstOrDefault(g => g.Id == (string)r.Tag!)?.Displays.Select(a => a.Serial) ?? config.Monitors.Select(m => m.Serial))
+                    .Select(serial => new Assignment { Serial = serial, Input = Convert.ToInt32(r.Cells[serial].Value) }).ToList(),
+                Shortcut = Convert.ToInt32(r.Cells[config.Monitors.Count+1].Value),
+                SwitchDelayMs = int.Parse(Convert.ToString(r.Cells["delay"].Value) ?? "")
             }).ToList();
             next.ShortcutsEnabled = enableKeys.Checked;
             next.MenuBrightnessLinked = menuLayout.SelectedIndex == 1; next.BrightnessStep = (int)brightnessStep.Value;
@@ -375,6 +400,13 @@ internal sealed class SwitchForm : Form {
         traySliders.Clear();
         foreach (ToolStripItem item in menu.Items.Cast<ToolStripItem>().ToList()) item.Dispose(); menu.Items.Clear();
         foreach (var g in config.Groups) menu.Items.Add(g.Name + (config.ShortcutsEnabled ? "   " + HotkeyCodes.Label(config.EffectiveHotkeys(false).FirstOrDefault(b => b.Action == "group:" + g.Id)) : ""), null, (_, _) => _ = Run(() => ApplyGroup(g)));
+        var single = new ToolStripMenuItem("单独切换输入源");
+        foreach (var monitor in config.Monitors) {
+            var item = new ToolStripMenuItem(monitor.Name);
+            foreach (int input in new[] { 27,15,17 }) item.DropDownItems.Add(Configuration.SourceName(input), null, (_, _) => _ = Run(() => SwitchInput(monitor.Serial,input)));
+            single.DropDownItems.Add(item);
+        }
+        menu.Items.Add(single);
         menu.Items.Add(new ToolStripSeparator());
         if (config.MenuBrightnessLinked) AddTraySlider("所有显示器联动",config.Monitors.Select(m => m.Serial).ToArray());
         else foreach (var m in config.Monitors) AddTraySlider(m.Name,[m.Serial]);
@@ -473,12 +505,18 @@ internal sealed class SwitchForm : Form {
     }
 
     async Task ApplyGroup(SwitchGroup g) {
-        config.Validate(); SetStatus("正在切到 " + g.Name + "…");
+        config.Validate(); SetStatus($"正在切到 {g.Name}…（逐台间隔 {g.SwitchDelayMs} 毫秒）");
         var ops = g.Displays.Select(a => new Operation { Serial = a.Serial, Input = a.Input }).ToList();
-        await Execute(ops, g.Name);
+        await Execute(ops, $"{g.Name} · 间隔 {g.SwitchDelayMs} 毫秒", g.SwitchDelayMs);
     }
-    async Task Execute(List<Operation> ops, string title) {
-        var result = await Task.Run(() => Ddc.Apply(ops)); var lines = new List<string> { title };
+    async Task SwitchInput(string serial, int input) {
+        var monitor = config.Monitors.FirstOrDefault(m => m.Serial == serial);
+        if (monitor == null || !Configuration.IsSource(input)) throw new Exception("显示器或输入源无效。");
+        SetStatus($"正在切换 {monitor.Name} → {Configuration.SourceName(input)}…");
+        await Execute([new() { Serial = serial, Input = input }], "单独切换 " + monitor.Name);
+    }
+    async Task Execute(List<Operation> ops, string title, int switchDelayMs = 0) {
+        var result = await Task.Run(() => Ddc.Apply(ops, switchDelayMs)); var lines = new List<string> { title };
         foreach (var r in result) {
             string name = config.Monitors.FirstOrDefault(m => m.Serial == r.Serial)?.Name ?? r.Serial;
             if (ops.First(o => o.Serial == r.Serial).Brightness != null) {
@@ -498,7 +536,7 @@ internal sealed class SwitchForm : Form {
         if (busy) return;
         using var p = new OpenFileDialog { Filter = "JSON 配置|*.json" };
         if (p.ShowDialog() != DialogResult.OK) return;
-        try { var c = Configuration.Parse(File.ReadAllText(p.FileName)); Store(c); dimming.Reset(); config = c; menuLayout.SelectedIndex = c.MenuBrightnessLinked ? 1 : 0; brightnessStep.Value = c.BrightnessStep; BuildGrid(); BuildBrightnessControls(); RegisterKeys(); BuildMenu(); saved.Text = "已导入并保存配置"; _ = Run(RefreshDisplays); }
+        try { var c = Configuration.Parse(File.ReadAllText(p.FileName)); Store(c); dimming.Reset(); config = c; menuLayout.SelectedIndex = c.MenuBrightnessLinked ? 1 : 0; brightnessStep.Value = c.BrightnessStep; BuildGrid(); BuildInputControls(); BuildBrightnessControls(); RegisterKeys(); BuildMenu(); saved.Text = "已导入并保存配置"; _ = Run(RefreshDisplays); }
         catch (Exception e) { saved.Text = "导入失败：" + e.Message; }
     }
     void Export() {
