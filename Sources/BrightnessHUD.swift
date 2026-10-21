@@ -50,7 +50,7 @@ private struct BrightnessHUDContent: View {
                 panel.isReleasedWhenClosed = false; panel.isOpaque = false; panel.backgroundColor = .clear
                 panel.hasShadow = false; panel.ignoresMouseEvents = true; panel.hidesOnDeactivate = false
                 // Keep feedback above our software shade without activating the app.
-                panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+                panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
                 panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
                 panel.title = "亮度提示"
                 let material = NSVisualEffectView()
@@ -65,7 +65,8 @@ private struct BrightnessHUDContent: View {
             let frame = screen.visibleFrame
             entry.panel.setFrame(NSRect(x: frame.midX - 90, y: frame.minY + frame.height * 0.18, width: 180, height: 170), display: true)
             entry.content.frame = entry.panel.contentView!.bounds
-            NSAnimationContext.runAnimationGroup { context in context.duration = 0; entry.panel.animator().alphaValue = 1 }
+            // Cancel any fade already in flight before reusing the panel.
+            entry.panel.alphaValue = 1
             entry.panel.orderFrontRegardless()
         }
         dismissal = Task { [weak self] in

@@ -36,11 +36,18 @@ import AppKit
             return (CFUUIDCreateString(nil, uuid) as String, "亮度测试", 65)
         }
         guard !targets.isEmpty else { throw ConfigError(message: "HUD test requires a desktop screen") }
+        let dimming = SoftwareDimming()
+        defer { dimming.reset() }
+        try dimming.apply([targets[0].id], percent: 70)
+        let shadeWindows = NSApp.windows.filter { $0.level.rawValue == Int(CGShieldingWindowLevel()) }
+        assert(shadeWindows.count >= 1, "Software shade must use the system shielding window level")
+        dimming.reset()
         let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
         hud.show(targets)
         assert(hud.visibleCount == targets.count)
         let panels = NSApp.windows.filter { $0.title == "亮度提示" }
         assert(panels.allSatisfy { $0.ignoresMouseEvents && !$0.canBecomeKey && !$0.canBecomeMain })
+        assert(panels.allSatisfy { $0.level.rawValue == Int(CGShieldingWindowLevel()) + 1 })
         assert(NSWorkspace.shared.frontmostApplication?.processIdentifier == foreground)
         try await Task.sleep(for: .milliseconds(800))
         hud.show([(targets[0].id, "连续调节", 70)])

@@ -3,6 +3,9 @@ import AppKit
 // Adapted from MonitorControl DisplayManager.swift, MIT License, Copyright © 2017.
 // Source: 7cfe64500d19cbbcbf82121a91c826f658a403bd; see vendor/MonitorControl/LICENSE.
 // A click-through shade leaves HDR and other apps' gamma tables untouched.
+// MonitorControl places this shade at CGShieldingWindowLevel(), rather than
+// the ordinary screen-saver level, so system overlays such as IME candidates
+// are covered as well.
 @MainActor final class SoftwareDimming {
     private var shades: [String: NSPanel] = [:]
     private(set) var levels: [String: Int] = [:]
@@ -42,7 +45,7 @@ import AppKit
                 panel.hasShadow = false
                 panel.ignoresMouseEvents = true
                 panel.hidesOnDeactivate = false
-                panel.level = .screenSaver
+                panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
                 panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
                 panel.setAccessibilityElement(false)
                 panel.contentView?.wantsLayer = true
