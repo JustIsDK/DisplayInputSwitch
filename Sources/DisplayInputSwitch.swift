@@ -113,7 +113,7 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.8")
+        record("启动显示器切换 2.9")
         Task { await refresh() }
     }
     func brightnessKeyTargets() -> [String] {
@@ -350,7 +350,10 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
             guard generation == brightnessGeneration else { return }
             if !soft.isEmpty {
                 let softIDs = zip(serials,ids).filter { soft.contains($0.0) }.map { $0.1 }
-                try dimming.apply(softIDs, percent: percent)
+                let gammaIDs = Set(zip(serials, ids).filter { serial, _ in
+                    soft.contains(serial) && displays.first { $0.serial == serial }?.hdr != true
+                }.map { $0.1 })
+                try dimming.apply(softIDs, percent: percent, gammaIDs: gammaIDs)
                 for serial in soft { levels[serial] = percent; levelErrors.removeValue(forKey: serial) }
                 status = (hard.isEmpty ? "" : status + "\n") + "软件亮度 \(percent)%（不更改 HDR）"; record(status)
             }
@@ -418,7 +421,7 @@ struct BrightnessPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Text(model.brightnessMode == "auto" ? "自动选择每台屏幕的调光方式" : software ? "保留 HDR，调暗当前画面" : "显示器硬件亮度").font(.headline)
-                Text(model.brightnessMode == "auto" ? "每屏分别检测 HDR：开启时软件调暗，关闭时硬件调光；未知时使用软件调暗。快捷键跟随每屏方式。软件 100% 表示原画面，硬件 100% 表示最大背光。" : software ? "100% 为原画面，最低 10%。通过透明遮罩调暗，不更改 HDR、背光或其他软件的伽马设置。启动时不自动调暗，退出后恢复。" : "适用于关闭 HDR 的显示器。HDR 下即使 DDC 数值变化，画面也可能不变。拖动松手后应用，也可点击“应用”。")
+                Text(model.brightnessMode == "auto" ? "每屏分别检测 HDR：开启时软件调暗，关闭时硬件调光；未知时使用软件调暗。快捷键跟随每屏方式。软件 100% 表示原画面，硬件 100% 表示最大背光。" : software ? "100% 为原画面，最低 10%。优先使用 MonitorControl 同款 Gamma 调暗；HDR 或 Gamma 不可用时使用系统遮罩。启动时不自动调暗，退出后恢复。" : "适用于关闭 HDR 的显示器。HDR 下即使 DDC 数值变化，画面也可能不变。拖动松手后应用，也可点击“应用”。")
                     .foregroundStyle(.secondary)
                 if software {
                     Button("恢复所有屏幕到 100%") { model.resetSoftwareDimming() }
