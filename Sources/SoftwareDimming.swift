@@ -7,7 +7,7 @@ import AppKit
 // the ordinary screen-saver level, so system overlays such as IME candidates
 // are covered as well.
 @MainActor final class SoftwareDimming {
-    private var shades: [String: NSPanel] = [:]
+    private var shades: [String: NSWindow] = [:]
     private(set) var levels: [String: Int] = [:]
 
     private func screens() -> [String: NSScreen] {
@@ -35,10 +35,10 @@ import AppKit
                 levels.removeValue(forKey: id)
                 continue
             }
-            let panel: NSPanel
+            let panel: NSWindow
             if let existing = shades[id] { panel = existing }
             else {
-                panel = NSPanel(contentRect: current[id]!.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                panel = NSWindow(contentRect: current[id]!.frame, styleMask: [], backing: .buffered, defer: false)
                 panel.isReleasedWhenClosed = false
                 panel.backgroundColor = .clear
                 panel.isOpaque = false
@@ -46,7 +46,7 @@ import AppKit
                 panel.ignoresMouseEvents = true
                 panel.hidesOnDeactivate = false
                 panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
-                panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+                panel.collectionBehavior = [.stationary, .canJoinAllSpaces, .ignoresCycle]
                 panel.setAccessibilityElement(false)
                 panel.contentView?.wantsLayer = true
                 panel.contentView?.layer?.backgroundColor = NSColor.black.cgColor
@@ -61,7 +61,10 @@ import AppKit
     func reconcile() {
         let current = screens()
         for id in Array(shades.keys) {
-            if let screen = current[id] { shades[id]?.setFrame(screen.frame, display: true) }
+            if let screen = current[id] {
+                shades[id]?.setFrame(screen.frame, display: true)
+                shades[id]?.orderFrontRegardless()
+            }
             else { shades.removeValue(forKey: id)?.close(); levels.removeValue(forKey: id) }
         }
     }

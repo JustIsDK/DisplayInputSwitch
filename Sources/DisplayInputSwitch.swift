@@ -107,10 +107,13 @@ func runHelper(_ arguments: [String]) async throws -> Reply {
                 await self?.refreshBrightness()
             }
         })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.dimming.reconcile() }
+        })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.7")
+        record("启动显示器切换 2.8")
         Task { await refresh() }
     }
     func brightnessKeyTargets() -> [String] {
