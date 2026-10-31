@@ -68,6 +68,9 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
     @Published var launchAtLogin = false
     @Published var loginStatus = ""
     @Published var loginNeedsApproval = false
+    @Published var colorProfileStatus = "正在读取颜色描述文件…"
+    @Published var colorProfileCanRepair = false
+    @Published var colorProfileBusy = false
     let configURL: URL
     let logURL: URL
     private let hotkeys = Hotkeys()
@@ -104,6 +107,7 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
             Task { @MainActor in
                 self?.dimming.reconcile()
                 self?.brightnessHUD.hide()
+                self?.refreshColorProfiles()
                 await self?.refreshBrightness()
             }
         })
@@ -113,8 +117,37 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.12")
+        record("启动显示器切换 2.13")
+        refreshColorProfiles()
         Task { await refresh() }
+    }
+    func refreshColorProfiles() {
+        do {
+            let report = try ColorProfileManager.inspect()
+            colorProfileStatus = report.summary
+            colorProfileCanRepair = report.qxNeedsRepair && report.targetAvailable
+        } catch {
+            colorProfileStatus = error.localizedDescription
+            colorProfileCanRepair = false
+        }
+    }
+    func repairQXColorProfile() {
+        guard !busy, !colorProfileBusy else { return }
+        colorProfileBusy = true
+        defer { colorProfileBusy = false }
+        do {
+            let before = try? ColorProfileManager.inspect()
+            let report = try ColorProfileManager.repairQX()
+            colorProfileStatus = report.summary
+            colorProfileCanRepair = report.qxNeedsRepair && report.targetAvailable
+            status = "已将 QX 设置为 HDR V4 颜色描述文件"
+            let old = before.map { ColorProfileReport.label($0.qxPath) } ?? "未知"
+            record("QX 颜色描述文件已修正：\(old) → HDR V4")
+        } catch {
+            colorProfileStatus = error.localizedDescription
+            status = colorProfileStatus
+            record(status)
+        }
     }
     func brightnessKeyTargets() -> [String] {
         if config.menuBrightnessLinked { return config.monitors.map(\.serial) }
@@ -548,6 +581,17 @@ struct SwitchView: View {
                         InputSwitchControl(model: model, serial: model.config.monitors[i].serial, name: model.config.monitors[i].name)
                     }
                     Divider()
+                    Text("颜色描述文件").font(.headline)
+                    Text(model.colorProfileStatus)
+                        .font(.callout).textSelection(.enabled)
+                    HStack {
+                        Button("重新检查") { model.refreshColorProfiles() }
+                        Button("一键修正 QX") { model.repairQXColorProfile() }
+                            .disabled(model.blocksInteraction || model.colorProfileBusy || !model.colorProfileCanRepair)
+                    }
+                    Text("QX 从 DP 切换到 USB-C 出现黑屏时，可将 QX 设置为 Dell 的 HDR V4 描述文件。此功能仅修改 macOS 的颜色描述文件，不修改显示器固件。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Divider()
                     Text("已检测到") .font(.headline)
                     ForEach(model.displays) { d in Text("\(d.name) · \(d.serial.isEmpty ? "无序列号" : d.serial)").textSelection(.enabled) }
                     Text("更换显示器或自定义序列号：导出 JSON，修改 monitors、groups 中的 serial，再导入。")
@@ -569,6 +613,7 @@ struct SwitchView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 model.refreshLoginStatus()
                 model.refreshBrightnessKeys()
+                model.refreshColorProfiles()
             }
     }
 }
