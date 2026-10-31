@@ -117,7 +117,7 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.13")
+        record("启动显示器切换 2.14")
         refreshColorProfiles()
         Task { await refresh() }
     }

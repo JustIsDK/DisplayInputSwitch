@@ -28,7 +28,7 @@ import AppKit
         }
         keys.stop(); assert(!keys.running)
 
-        let hud = BrightnessHUD()
+        let hud = BrightnessHUD(useSystem: false)
         defer { hud.hide() }
         let targets = NSScreen.screens.compactMap { screen -> (id: String, name: String, percent: Int)? in
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,

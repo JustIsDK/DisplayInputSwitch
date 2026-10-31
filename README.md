@@ -44,7 +44,9 @@ macOS 应用、Windows 程序和托盘使用统一的双显示器切换图标。
 
 每项操作均可录制组合键：切换组别、所有屏幕调亮/调暗、每屏调亮/调暗、恢复所有软件调暗。点击按键框（Windows 点击“录制”），按下包含 Control、Option/Alt 或 Command/Win 的组合键；Esc 取消，清除禁用该项，保存后注册为全局快捷键。系统占用和重复配置会显示错误。亮度步长可设置 1–20%，跟随当前逐屏调光方式；联动快捷键以第一台屏幕当前值计算，将所有屏幕设为相同比例。恢复操作只撤掉本工具的遮罩。
 
-macOS 调节成功后，在目标屏幕下方显示类似系统亮度提示的太阳图标、屏幕名、百分比和进度条；约 1.2 秒后淡出。联动时两屏分别显示，连续操作更新原浮层，不抢焦点、不挡鼠标。调暗遮罩使用与 MonitorControl 相同的 `CGShieldingWindowLevel()` 系统层级，因此输入法候选条等普通系统叠加窗口也会一起变暗。调节期间保留现有亮度数值，完成读取后一次更新，不再反复禁用整页；连续调节会合并待处理请求，拖动时保留滑块位置。Windows 同步修复整页禁用引起的闪烁；系统样式浮层目前仅用于 macOS。
+macOS v2.14 调节成功后直接调用系统 `OSDUIHelper`，在目标屏幕显示由 macOS 绘制的经典太阳图标和亮度进度条，约 1.2 秒后开始淡出。联动时两屏分别显示；滑块、全局快捷键和顶部亮度键共用此提示，不抢焦点、不修改系统 HDR 或实际调光方式。此私有接口的实现参考 [MonitorControl OSDUtils](https://github.com/MonitorControl/MonitorControl/blob/main/MonitorControl/Support/OSDUtils.swift)，已在本机 macOS 26.6.2 验证进度条由 65% 更新为 35%；系统绘制样式没有屏幕名和数字百分比。接口不可用或 XPC 请求失败时回退到原有自绘提示。其他 macOS 版本尚未实机验证。
+
+调暗遮罩使用与 MonitorControl 相同的 `CGShieldingWindowLevel()` 系统层级，因此输入法候选条等普通系统叠加窗口也会一起变暗。调节期间保留现有亮度数值，完成读取后一次更新，不再反复禁用整页；连续调节会合并待处理请求，拖动时保留滑块位置。Windows 同步修复整页禁用引起的闪烁；系统亮度提示仅用于 macOS。
 
 macOS “状态栏 → 使用键盘顶部亮度键”是独立的本机开关，默认关闭，立即生效，不随 JSON 导入导出。启用后需在系统设置 → 隐私与安全性 → 辅助功能中允许“显示器切换”，返回本工具设置页即可重试；权限不足或系统无法接入会显示原因，原有自定义全局快捷键仍可用。启用时，联动布局调全部配置屏幕，分开布局调鼠标所在的配置屏幕；无可用目标时保留系统行为。不接管音量、键盘背光、内置屏幕调光或 Command/Control/Option 修饰的系统亮度键组合。顶排设为标准 F1、F2 时，请配合 Fn 使用太阳图标功能。同类工具若也接管亮度键，建议只在一个工具中启用。
 
@@ -125,7 +127,14 @@ xcrun swiftc Sources/Configuration.swift Sources/SoftwareDimming.swift Tests/Sof
 build/software-dimming-check
 ```
 
-可选 macOS 亮度提示与功能键检查（短暂显示浮层；不调节亮度、不请求系统权限）：
+可选 macOS 原生亮度提示检查（短暂显示系统 OSD；不调节亮度）：
+
+```sh
+xcrun swiftc -parse-as-library Sources/BrightnessHUD.swift Tests/NativeBrightnessHUD/main.swift -o build/native-brightness-hud-check
+build/native-brightness-hud-check
+```
+
+可选 macOS 回退浮层与功能键检查（会短暂调暗后恢复，不请求系统权限）：
 
 ```sh
 xcrun swiftc -parse-as-library Sources/Configuration.swift Sources/SoftwareDimming.swift Sources/BrightnessHUD.swift Sources/BrightnessKeys.swift Tests/BrightnessFeedback/main.swift -o build/brightness-feedback-check

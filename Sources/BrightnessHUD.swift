@@ -1,6 +1,56 @@
 import AppKit
 import SwiftUI
 
+@objc private protocol SystemOSDProtocol {
+    @objc(showImage:onDisplayID:priority:msecUntilFade:filledChiclets:totalChiclets:locked:)
+    func showImage(_ image: Int64, onDisplayID: UInt32, priority: UInt32, msecUntilFade: UInt32,
+                   filledChiclets: UInt32, totalChiclets: UInt32, locked: Bool)
+    @objc(fadeClassicImageOnDisplay:)
+    func fadeClassicImage(onDisplay: UInt32)
+}
+
+// shortcut: Apple's private OSD service may change; use our own HUD if the connection fails.
+@MainActor private final class SystemBrightnessOSD {
+    private var connection: NSXPCConnection?
+    private var displayIDs: Set<UInt32> = []
+    private var failure: (@MainActor () -> Void)?
+    func show(_ values: [(displayID: UInt32, percent: Int)], onFailure: @escaping @MainActor () -> Void) {
+        guard FileManager.default.fileExists(atPath: "/System/Library/CoreServices/OSDUIHelper.app") else { onFailure(); return }
+        failure = onFailure
+        let connection: NSXPCConnection
+        if let existing = self.connection { connection = existing }
+        else {
+            connection = NSXPCConnection(machServiceName: "com.apple.OSDUIHelper", options: [])
+            connection.remoteObjectInterface = NSXPCInterface(with: SystemOSDProtocol.self)
+            self.connection = connection
+            connection.resume()
+        }
+        let proxy = connection.remoteObjectProxyWithErrorHandler { [weak self, weak connection] _ in
+            Task { @MainActor in
+                guard let self, self.connection === connection else { return }
+                let fallback = self.failure; self.failure = nil
+                self.connection?.invalidate(); self.connection = nil
+                fallback?()
+            }
+        }
+        guard let helper = proxy as? SystemOSDProtocol else { onFailure(); return }
+        let targets = Set(values.map(\.displayID))
+        for id in displayIDs.subtracting(targets) { helper.fadeClassicImage(onDisplay: id) }
+        displayIDs = targets
+        for value in values {
+            helper.showImage(1, onDisplayID: value.displayID, priority: 0x1F4, msecUntilFade: 1200,
+                             filledChiclets: UInt32(value.percent), totalChiclets: 100, locked: false)
+        }
+    }
+    func hide() {
+        failure = nil
+        if let helper = connection?.remoteObjectProxy as? SystemOSDProtocol {
+            for id in displayIDs { helper.fadeClassicImage(onDisplay: id) }
+        }
+        displayIDs.removeAll()
+    }
+}
+
 private struct BrightnessHUDContent: View {
     let name: String
     let percent: Int
@@ -21,6 +71,10 @@ private struct BrightnessHUDContent: View {
 }
 
 @MainActor final class BrightnessHUD {
+    private let systemOSD = SystemBrightnessOSD()
+    private let useSystem: Bool
+    private var generation = 0
+    init(useSystem: Bool = true) { self.useSystem = useSystem }
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { false }
         override var canBecomeMain: Bool { false }
@@ -34,6 +88,24 @@ private struct BrightnessHUDContent: View {
     var visibleCount: Int { entries.values.filter { $0.panel.isVisible }.count }
 
     func show(_ values: [(id: String, name: String, percent: Int)]) {
+        generation += 1
+        let request = generation
+        guard useSystem else { showCustom(values); return }
+        let targets = NSScreen.screens.compactMap { screen -> (displayID: UInt32, percent: Int)? in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                  let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue(),
+                  let value = values.first(where: { $0.id == CFUUIDCreateString(nil, uuid) as String }),
+                  (0...100).contains(value.percent) else { return nil }
+            return (number.uint32Value, value.percent)
+        }
+        dismissal?.cancel()
+        entries.values.forEach { $0.panel.close() }; entries.removeAll()
+        systemOSD.show(targets) { [weak self] in
+            guard let self, self.generation == request else { return }
+            self.showCustom(values)
+        }
+    }
+    private func showCustom(_ values: [(id: String, name: String, percent: Int)]) {
         dismissal?.cancel()
         let targets = Set(values.map(\.id))
         for id in entries.keys.filter({ !targets.contains($0) }) { entries.removeValue(forKey: id)?.panel.close() }
@@ -84,6 +156,7 @@ private struct BrightnessHUDContent: View {
         }
     }
     func hide() {
+        generation += 1; systemOSD.hide()
         dismissal?.cancel(); dismissal = nil
         entries.values.forEach { $0.panel.close() }; entries.removeAll()
     }
