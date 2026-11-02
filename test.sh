@@ -6,5 +6,7 @@ xcrun swiftc Sources/Configuration.swift Tests/CoreChecks/main.swift -o build/co
 build/core-checks
 xcrun swiftc -parse-as-library Sources/Configuration.swift Sources/ColorProfile.swift Sources/HDR.swift Tests/DisplaySettings/main.swift -framework ColorSync -o build/display-settings-check
 build/display-settings-check
+xcrun swiftc -parse-as-library Sources/Configuration.swift Sources/ColorProfile.swift Sources/HDR.swift Sources/DellHDR.swift Tests/DellHDR/main.swift -framework ColorSync -o build/dell-hdr-check
+build/dell-hdr-check
 python3 -B Tests/release-check.py
 zsh build.sh

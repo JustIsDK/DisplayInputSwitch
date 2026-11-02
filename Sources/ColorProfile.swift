@@ -100,9 +100,21 @@ struct ColorDisplayState: Identifiable, Equatable {
     static func displayID(forUUID expected: String) throws -> CGDirectDisplayID {
         for screen in NSScreen.screens {
             let id = try displayID(screen)
-            if try uuid(id) == expected { return id }
+            if (try? uuid(id)) == expected { return id }
         }
         throw ConfigError(message: "目标显示器已断开或标识改变，请重新检查。")
+    }
+
+    static func displayID(model: DellMonitorModel, serialNumber: UInt32) throws -> CGDirectDisplayID {
+        guard serialNumber != 0, let screen = try screen(for: model) else {
+            throw ConfigError(message: "未找到唯一的目标显示器，请重新检查。")
+        }
+        let id = try displayID(screen)
+        guard CGDisplaySerialNumber(id) == serialNumber else {
+            throw ConfigError(message: "显示器硬件序列号不匹配，未确认 HDR 状态。")
+        }
+        _ = try uuid(id)
+        return id
     }
 
     private static func screen(for model: DellMonitorModel) throws -> NSScreen? {

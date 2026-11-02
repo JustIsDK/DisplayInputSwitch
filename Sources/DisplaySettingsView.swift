@@ -60,11 +60,15 @@ private struct DisplayColorRow: View {
                     Toggle("高动态范围（HDR）", isOn: Binding(
                         get: { display.hdr.enabled ?? false },
                         set: { enabled in Task { await model.setHDR(enabled, for: display) } }))
-                        .toggleStyle(.switch).disabled(!display.hdr.canSet)
+                        .toggleStyle(.switch).disabled(!model.canSetHDR(for: display))
                     Spacer()
-                    Text(display.hdr.label).font(.caption).foregroundStyle(.secondary)
+                    Text(display.hdr.supported == false && model.dellHDRServiceTag(for: display) != nil ? "HDR 已关闭 · 可直接开启" : display.hdr.label)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                if !display.hdr.canSet {
+                if model.dellHDRServiceTag(for: display) != nil {
+                    Text("通过已安装的 Dell DDPM 控制此屏，无需先到显示器菜单开启 Smart HDR。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if !display.hdr.canSet {
                     Text(display.hdr.supported == false ? "在显示器菜单启用 Smart HDR 后，点击重新检查；也可到 macOS 显示器设置确认。" : "当前系统未提供可用的 HDR 控制接口，请到 macOS 显示器设置调整。")
                         .font(.caption).foregroundStyle(.secondary)
                 }

@@ -44,9 +44,20 @@ enum HDRController {
         }
         let complete = CGCompleteDisplayConfiguration(configuration, .forSession)
         guard complete == .success else { throw ConfigError(message: "HDR 提交失败（\(complete.rawValue)），请重新检查实际状态。") }
-        for _ in 0..<20 {
+        try await confirm(requested, uuid: uuid)
+    }
+    @MainActor static func confirm(_ requested: Bool, uuid: String) async throws {
+        try await confirm(requested) { try ColorProfileManager.displayID(forUUID: uuid) }
+    }
+    @MainActor static func confirm(_ requested: Bool, resolve: () throws -> CGDirectDisplayID) async throws {
+        var stable = 0
+        for _ in 0..<40 {
             try await Task.sleep(for: .milliseconds(250))
-            if let currentID = try? ColorProfileManager.displayID(forUUID: uuid), inspect(currentID).enabled == requested { return }
+            if let currentID = try? resolve(), inspect(currentID).enabled == requested {
+                // HDR can briefly report the target state before EDID reconnection finishes.
+                stable += 1
+                if stable >= 6 { return }
+            } else { stable = 0 }
         }
         throw ConfigError(message: "HDR 请求已提交，但未确认目标状态，请重新检查。")
     }

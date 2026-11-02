@@ -117,7 +117,7 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.15")
+        record("启动显示器切换 2.16")
         refreshColorProfiles()
         Task { await refresh() }
     }
@@ -168,6 +168,17 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
         status = colorProfileStatus; record(status)
         await reloadAfterDisplaySettingsChange()
     }
+    func dellHDRServiceTag(for target: ColorDisplayState) -> String? {
+        guard DellHDRCLI.available else { return nil }
+        let matches = displays.filter { $0.id == target.uuid && $0.name.localizedCaseInsensitiveContains(target.model.rawValue) }
+        guard matches.count == 1, let tag = matches.first?.serial,
+              displays.filter({ $0.serial == tag }).count == 1,
+              (try? DellHDRCLI.arguments(enabled: nil, serviceTag: tag)) != nil else { return nil }
+        return tag
+    }
+    func canSetHDR(for target: ColorDisplayState) -> Bool {
+        target.hdr.canSet || dellHDRServiceTag(for: target) != nil
+    }
     func setHDR(_ enabled: Bool, for target: ColorDisplayState) async {
         guard !busy, !colorProfileBusy else { return }
         busy = true; colorProfileBusy = true
@@ -175,10 +186,13 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
         do {
             let id = try ColorProfileManager.displayID(forUUID: target.uuid)
             let state = HDRController.inspect(id)
-            guard state.canSet else { throw ConfigError(message: state.label + "；暂时无法切换。") }
-            record("HDR 变更前：\(target.model.rawValue) UUID=\(target.uuid) 原状态=\(state.label) 目标=\(enabled ? "开启" : "关闭")")
+            let serviceTag = dellHDRServiceTag(for: target)
+            guard state.canSet || serviceTag != nil else { throw ConfigError(message: state.label + "；暂时无法切换。") }
+            record("HDR 变更前：\(target.model.rawValue) UUID=\(target.uuid) 原状态=\(state.label) 目标=\(enabled ? "开启" : "关闭") 路径=\(serviceTag == nil ? "macOS" : "Dell DDPM")")
             try prepareDisplaySettingsChange([target])
-            try await HDRController.set(enabled, uuid: target.uuid)
+            if let serviceTag {
+                try await DellHDRCLI.set(enabled, model: target.model, serviceTag: serviceTag, uuid: target.uuid)
+            } else { try await HDRController.set(enabled, uuid: target.uuid) }
             colorProfileStatus = "\(target.model.rawValue)：已确认 HDR \(enabled ? "开启" : "关闭")"
         } catch { colorProfileStatus = error.localizedDescription }
         status = colorProfileStatus; record(status)
