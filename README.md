@@ -50,7 +50,7 @@ macOS 动态加载 SkyLight 的 `SLSDisplaySupportsHDRMode`、`SLSDisplayIsHDRMo
 
 软件调暗只影响当前主机画面；不会提高显示器背光亮度。与 MonitorControl、夜间调色等软件同时运行时，Gamma 或遮罩效果会叠加，本工具不会改写其他工具设置。切换 macOS 桌面空间后会重新排列遮罩；独占全屏、受保护视频、系统安全界面可能绕过普通桌面遮罩；HDR 高光与 SDR 界面的观感比例也不保证保持一致。
 
-当前 QX 固件没有提供已验证可用的 USB 控制接口，因此已移除 USB 归属、校准和独立切换功能。USB-C 视频输入保留。音频输出选择和音量控制暂未实现。
+当前 QX 固件没有提供已验证可用的 USB 控制接口，因此已移除 USB 归属和校准功能；显示器输入源仍支持单独切换和组切换。USB-C 视频输入保留。音频输出选择和音量控制暂未实现。
 
 ### 状态栏与全局快捷键
 
@@ -79,6 +79,8 @@ v2.12 已通过两端配置迁移、延时范围和序列化检查，以及底�
 切到另一主机后，DDC 通道可能消失。另一台主机需要运行本工具且能检测到显示器，才能从该端切回；程序不通过网络代理控制另一台主机。
 
 ## 构建和检查
+
+开发约束、硬件边界、配置迁移、测试分级和发布规则见 [DEVELOPMENT.md](DEVELOPMENT.md)；贡献代码前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。自动化代理还应遵循 [AGENTS.md](AGENTS.md)。
 
 macOS：Apple Silicon，macOS 14+，Xcode Command Line Tools。
 
