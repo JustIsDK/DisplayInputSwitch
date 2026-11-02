@@ -8,5 +8,6 @@ xcrun swiftc -parse-as-library Sources/Configuration.swift Sources/ColorProfile.
 build/display-settings-check
 xcrun swiftc -parse-as-library Sources/Configuration.swift Sources/ColorProfile.swift Sources/HDR.swift Sources/DellHDR.swift Tests/DellHDR/main.swift -framework ColorSync -o build/dell-hdr-check
 build/dell-hdr-check
+xcrun clang -arch arm64 -fmodules -fmodules-cache-path="$PWD/build/module-cache" -mmacosx-version-min=14.0 -I vendor/m1ddc/headers Tests/DellHDR/prepare-off.m vendor/m1ddc/sources/ioregistry.m -framework Foundation -framework IOKit -framework CoreGraphics -framework CoreDisplay -o build/dell-hdr-prepare-off
 python3 -B Tests/release-check.py
 zsh build.sh

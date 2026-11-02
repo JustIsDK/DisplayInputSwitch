@@ -23,19 +23,19 @@ macOS 应用、Windows 程序和托盘使用统一的双显示器切换图标。
 - macOS “显示器 → 颜色与 HDR”支持每屏选择 **HDR V4 / Native V2**，点击“应用到此屏”生效；也可选择模式后“一键同步到两台显示器”。同步按 QX / QE 各自型号选取文件，不要求两屏共用同一路径。每屏另有独立 **HDR 开关**，与颜色描述文件分别控制。
 - 开启显示器的 DDC/CI。其他显示器控制工具可能争用通道；本程序不会自行退出它们。
 
-### 颜色描述文件与 HDR（macOS v2.16）
+### 颜色描述文件与 HDR（macOS v2.17）
 
 两种描述文件从已安装的 Dell DDPM 或用户 / 系统 ColorSync Profiles 目录发现，不在安装包中重新分发。对应文件为 `Dell_U2723QX_HDR_v4_MHC2.icm` / `Dell_U2723QX_Native_v2.icm`，QE 使用文件名中的 `U2723QE`。界面显示实际文件名，悬停可查看完整路径；Dell 文件内部描述名称相同，不能据此判断型号或模式。缺少文件时禁用对应应用操作。
 
 同步会先检查两台屏幕的唯一匹配、UUID、目标文件及 ICC 有效性，任一检查失败则整组不修改。提交后逐屏回读 ColorSync 路径确认；执行过程中断线仍可能部分完成，界面和日志会分别报告结果。改动前记录原文件完整路径与 UUID，不自动回滚用户已成功应用的选择。切换颜色或 HDR 前撤销目标屏幕的本工具软件调暗，避免继续使用旧 Gamma 表；操作完成后重新读取 HDR 与调光方式。选择和开关仅由明确操作生效，启动和重新检查不写入。
 
-HDR V4 是颜色描述文件类型，**不等于开启 HDR**。安装 [Dell Display and Peripheral Manager](https://www.dell.com/support/product-details/en-us/product/dell-display-peripheral-manager/resources/manuals)（DDPM）后，HDR 开关优先调用其官方命令行，同时控制显示器 Smart HDR 和系统 HDR，**无需先在显示器菜单开启 Smart HDR**。本机路径为 `/Applications/DDPM/DDPM.app/Contents/MacOS/DDPM`；DDPM 必须保持安装，本工具不包含或重新分发 Dell 的程序。
+HDR V4 是颜色描述文件类型，**不等于开启 HDR**。v2.17 的 HDR 控制直接通过本工具的 DDC helper 和 macOS 完成，运行时无需安装或启动 Dell DDPM，也不加载或重新分发 Dell 的程序 / SDK。颜色描述文件仍需单独提供。
 
-调用前按型号、当前 UUID 和唯一服务编号匹配目标，使用 `-ServiceTag` 指定单屏并预读确认；不会依赖显示器排列或命令行索引。命令即使退出码为零也须检查 JSON 的 `Result`、目标及操作。Smart HDR 可能改变 EDID 和 macOS UUID，提交后用型号与硬件序列号跟踪重连，等待 macOS 实际状态，再向 DDPM 回读确认。请求有超时保护；失败可能已部分执行，界面会提示重新检查，不自动回滚用户操作。
+仅对唯一匹配的 Dell U2723QX / U2723QE 启用硬件路径。开启时，若当前连接未提供 HDR，先预读硬件状态、清理 DDC 通道，再发送 Dell Smart HDR 命令（VCP `0xEA`，值 `0xFE01`）。Smart HDR 可能改变 EDID 和 macOS UUID，因此通过型号与硬件序列号跟踪同一块屏幕，等待其重新提供 HDR 模式后开启系统 HDR。关闭时只关闭系统 HDR，保留显示器 Smart HDR 能力，减少不必要的重连。
 
-未安装 DDPM 时保留 macOS 原生路径：动态加载 SkyLight 的 `SLSDisplaySupportsHDRMode`、`SLSDisplayIsHDRModeEnabled` 与 `SLSDisplaySetHDRModeEnabled`，签名参考 [AllRez AppleMisc.h](https://github.com/joevt/AllRez/blob/main/AllRez/AppleMisc.h)。这一路径要求当前连接已提供 HDR；否则禁用开关并提示检查 Smart HDR / 系统设置。该私有接口可能随 macOS 更新变化。
+macOS 动态加载 SkyLight 的 `SLSDisplaySupportsHDRMode`、`SLSDisplayIsHDRModeEnabled` 与 `SLSDisplaySetHDRModeEnabled`，签名参考 [AllRez AppleMisc.h](https://github.com/joevt/AllRez/blob/main/AllRez/AppleMisc.h)。操作后等待系统状态稳定，开启时还回读显示器的 HDR 状态位（`0xF2` 的 `0x40`）。关闭以系统状态为准：本机 QX 在系统输出 SDR 时该位仍可能保持开启，因此不能单凭它判断系统 HDR。重连可能把另一台屏幕重置到 SDR，工具会恢复另一屏操作前的系统 HDR 状态。失败可能已部分执行，界面提示重新检查；不会仅凭 DDC 写入返回成功就确认变更。私有系统接口可能随 macOS 更新变化。
 
-本机双屏已验证 HDR V4 / Native V2 的写入和回读，以及原路径恢复。2026-11-02 使用 DDPM 2.3.0.2004 实测：QX、QE 均可从 Smart HDR 关闭状态通过软件独立开启 / 关闭 HDR，每次由 DDPM 与 macOS 双重回读确认，另一屏保持不变；已验证 UUID 改变后的状态跟踪，结束后恢复原 HDR 状态与描述文件。其他型号、固件及 DDPM 版本尚未实测。
+2026-11-02 在本机 U2723QX / U2723QE（M2T105）实测通过：每台分别在另一屏 HDR 开启、关闭时，从 Smart HDR 关闭状态独立开启，再关闭 / 重新开启系统 HDR；核对系统稳定状态、开启后的显示器状态位、另一屏未变及原描述文件路径恢复。该测试没有执行 Dell 程序或 SDK。其他型号、固件和 macOS 版本尚未实测。
 
 ### 亮度调节
 
@@ -170,9 +170,9 @@ build/brightness-feedback-check
 build/display-settings-check --hardware
 ```
 
-可选 Dell 官方 HDR 实机测试（需安装 DDPM，关闭本工具后执行；依次切换两屏 HDR、验证另一屏未变，再恢复原 HDR 状态及描述文件）：
+可选独立 HDR 实机测试（关闭本工具后执行；会短暂重连屏幕，分别从 Smart HDR 关闭状态开启两屏，验证另一屏 HDR 开 / 关两种组合，再恢复原系统 HDR 状态及描述文件。测试夹具会把显示器 Smart HDR 预设切到桌面模式）：
 
 ```sh
-# test.sh 已编译该检查；不加 --hardware 仅检查参数与响应解析，不修改显示器。
+# test.sh 已编译该检查；不加 --hardware 仅检查失效目标拒绝，不修改显示器。
 build/dell-hdr-check --hardware
 ```

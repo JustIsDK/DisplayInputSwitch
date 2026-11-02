@@ -35,6 +35,21 @@ static int get(DDCTransport t, uint8_t code, int *maximum) {
     if (current>=0 && maximum) *maximum=((int)b[6]<<8)|b[7];
     return current;
 }
+static BOOL smartHDR(DDCTransport t, BOOL enabled) {
+    // Clear pending DDC replies before the vendor command, as required by Dell's ARM DDC sequence.
+    NSData *clean=packet(0,-1);
+    for(int i=0;i<3;i++) {
+        usleep(60000);
+        if(IOAVServiceWriteI2C(t.service,t.chipAddress,0x51,(void *)clean.bytes,(uint32_t)clean.length)) return NO;
+    }
+    NSData *p=packet(0xea,enabled?0xfe01:0xfe00);
+    usleep(60000);
+    if(IOAVServiceWriteI2C(t.service,t.chipAddress,0x51,(void *)p.bytes,(uint32_t)p.length)) return NO;
+    // Repeat the same idempotent request; the first can be ignored, or reconnect can invalidate the second.
+    usleep(60000);
+    IOAVServiceWriteI2C(t.service,t.chipAddress,0x51,(void *)p.bytes,(uint32_t)p.length);
+    return YES; // Delivery only; the caller must verify the reconnected monitor and OS HDR state.
+}
 static int emit(NSDictionary *d, int status) {
     NSData *data=[NSJSONSerialization dataWithJSONObject:d options:0 error:NULL];
     fwrite(data.bytes,1,data.length,stdout); fputc('\n',stdout); return status;
@@ -63,6 +78,8 @@ static void selfTest(void) {
     assert([packet(0x60,-1) isEqualToData:[NSData dataWithBytes:expected length:4]]);
     const uint8_t brightnessRead[]={0x82,1,0x10,0xac};
     assert([packet(0x10,-1) isEqualToData:[NSData dataWithBytes:brightnessRead length:4]]);
+    const uint8_t smartHDR[]={0x84,0x03,0xea,0xfe,0x01,0xad};
+    assert([packet(0xea,0xfe01) isEqualToData:[NSData dataWithBytes:smartHDR length:6]]);
     const int codes[]={0x60,0x10};
     for (int k=0;k<2;k++) {
         int code=codes[k];
@@ -98,7 +115,8 @@ int main(int argc,const char *argv[]) {
     if(argc==2 && !strcmp(argv[1],"--self-test")) { selfTest(); return emit(@{@"ok":@YES},0); }
     NSString *cmd=argc>1 ? @(argv[1]) : @"";
     BOOL list=[cmd isEqual:@"list"], batch=[cmd isEqual:@"batch"], read=[cmd isEqual:@"get"], brightness=[cmd isEqual:@"brightness-get"];
-    if(!(list&&argc==2) && !(batch&&(argc==3||argc==4)) && !((read||brightness)&&argc==3)) return fail(@"用法：list | get <serial/UUID> | brightness-get <serial/UUID> | batch <JSON> [间隔毫秒]");
+    BOOL hdrRead=[cmd isEqual:@"hdr-get"], hdrEnable=[cmd isEqual:@"hdr-enable"];
+    if(!(list&&argc==2) && !(batch&&(argc==3||argc==4)) && !((read||brightness||hdrRead||hdrEnable)&&argc==3)) return fail(@"用法：list | get <serial/UUID> | brightness-get <serial/UUID> | hdr-get <serial/UUID> | hdr-enable <serial/UUID> | batch <JSON> [间隔毫秒]");
     int delayMs=0;
     if(batch && argc==4) {
         NSScanner *scanner=[NSScanner scannerWithString:@(argv[3])];
@@ -124,6 +142,26 @@ int main(int argc,const char *argv[]) {
         [items addObject:item];
     }
     if(list) return emit(@{@"ok":@YES,@"displays":items},0);
+    if(hdrRead || hdrEnable) {
+        NSString *identity=@(argv[2]); int matches=0, index=-1;
+        for(int i=0;i<count;i++) if([displays[i].alphNumSerial isEqual:identity] || [displays[i].uuid isEqual:identity]) { matches++; index=i; }
+        if(matches!=1 || displays[index].vendor!=4268 ||
+           ![@[@"DELL U2723QX",@"DELL U2723QE"] containsObject:displays[index].productName]) return fail(@"HDR 直连仅支持唯一匹配的 Dell U2723QX / U2723QE，未发送请求。");
+        DDCTransport t=getDisplayDDCTransport(&displays[index]);
+        if(!t.service) return fail(@"无法打开目标显示器的 HDR DDC 通道。");
+        if(hdrEnable) {
+            if(get(t,0xf2,NULL)<0) { CFRelease(t.service); return fail(@"目标显示器未响应 HDR 状态预读，未发送变更。"); }
+            BOOL sent=smartHDR(t,YES);
+            CFRelease(t.service);
+            if(!sent) return fail(@"Smart HDR 请求发送失败，可能已部分执行，请重新检查。");
+            return emit(@{@"ok":@YES,@"hdrSent":@YES},0);
+        }
+        // Preserve the raw vendor status: F2 bit 6 can remain set in SDR on QX.
+        int preset=get(t,0xe2,NULL), active=get(t,0xf2,NULL);
+        CFRelease(t.service);
+        if(preset<0 || active<0) return fail(@"无法读取目标显示器的 HDR 硬件状态。");
+        return emit(@{@"ok":@YES,@"hdrPreset":@(preset),@"hdrStatusFlags":@(active)},0);
+    }
     if(!batch) operations=@[@{@"serial":@(argv[2])}];
     DDCTransport transports[8]={}; NSMutableArray *results=[NSMutableArray array]; BOOL preflight=YES;
     // Open every target before sending any changes.

@@ -66,7 +66,7 @@ private struct DisplayColorRow: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if model.dellHDRServiceTag(for: display) != nil {
-                    Text("通过已安装的 Dell DDPM 控制此屏，无需先到显示器菜单开启 Smart HDR。")
+                    Text("直接通过 DDC 与 macOS 控制，无需安装 Dell DDPM 或手动开启 Smart HDR。关闭 HDR 时保留 Smart HDR 可用。")
                         .font(.caption).foregroundStyle(.secondary)
                 } else if !display.hdr.canSet {
                     Text(display.hdr.supported == false ? "在显示器菜单启用 Smart HDR 后，点击重新检查；也可到 macOS 显示器设置确认。" : "当前系统未提供可用的 HDR 控制接口，请到 macOS 显示器设置调整。")
