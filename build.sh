@@ -11,7 +11,7 @@ xcrun clang -arch arm64 -fmodules -fmodules-cache-path="$PWD/build/module-cache"
   -o "$app/Contents/Resources/input-ddc"
 
 xcrun swiftc -parse-as-library -O -module-cache-path "$PWD/build/module-cache" \
-  -target arm64-apple-macosx14.0 Sources/Configuration.swift Sources/ColorProfile.swift Sources/SoftwareDimming.swift Sources/BrightnessHUD.swift Sources/BrightnessKeys.swift Sources/Hotkeys.swift Sources/DisplayInputSwitch.swift \
+  -target arm64-apple-macosx14.0 Sources/Configuration.swift Sources/ColorProfile.swift Sources/HDR.swift Sources/DisplaySettingsView.swift Sources/SoftwareDimming.swift Sources/BrightnessHUD.swift Sources/BrightnessKeys.swift Sources/Hotkeys.swift Sources/DisplayInputSwitch.swift \
   -framework ColorSync \
   -o "$app/Contents/MacOS/DisplayInputSwitch"
 

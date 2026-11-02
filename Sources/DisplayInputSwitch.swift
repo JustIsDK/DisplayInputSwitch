@@ -69,7 +69,7 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
     @Published var loginStatus = ""
     @Published var loginNeedsApproval = false
     @Published var colorProfileStatus = "正在读取颜色描述文件…"
-    @Published var colorProfileCanRepair = false
+    @Published var colorDisplays: [ColorDisplayState] = []
     @Published var colorProfileBusy = false
     let configURL: URL
     let logURL: URL
@@ -117,37 +117,72 @@ func runHelper(_ arguments: [String], timeoutSeconds: Double = 15) async throws 
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dimming.reset(); self?.brightnessHUD.hide(); self?.brightnessKeys.stop() }
         })
-        record("启动显示器切换 2.14")
+        record("启动显示器切换 2.15")
         refreshColorProfiles()
         Task { await refresh() }
     }
     func refreshColorProfiles() {
         do {
-            let report = try ColorProfileManager.inspect()
-            colorProfileStatus = report.summary
-            colorProfileCanRepair = report.qxNeedsRepair && report.targetAvailable
+            colorDisplays = try ColorProfileManager.inspect()
+            if colorDisplays.isEmpty { colorProfileStatus = "未找到 QX / QE 显示器。" }
+            else if colorProfileStatus == "正在读取颜色描述文件…" { colorProfileStatus = "选择描述文件后点击应用，或同步到两台显示器。" }
         } catch {
-            colorProfileStatus = error.localizedDescription
-            colorProfileCanRepair = false
+            colorDisplays = []; colorProfileStatus = error.localizedDescription
         }
     }
-    func repairQXColorProfile() {
-        guard !busy, !colorProfileBusy else { return }
-        colorProfileBusy = true
-        defer { colorProfileBusy = false }
+    private func prepareDisplaySettingsChange(_ targets: [ColorDisplayState]) throws {
+        brightnessGeneration += 1; pendingBrightness = nil; brightnessHUD.hide()
+        for target in targets { try dimming.apply([target.uuid], percent: 100) }
+    }
+    private func reloadAfterDisplaySettingsChange() async {
+        refreshColorProfiles()
         do {
-            let before = try? ColorProfileManager.inspect()
-            let report = try ColorProfileManager.repairQX()
-            colorProfileStatus = report.summary
-            colorProfileCanRepair = report.qxNeedsRepair && report.targetAvailable
-            status = "已将 QX 设置为 HDR V4 颜色描述文件"
-            let old = before.map { ColorProfileReport.label($0.qxPath) } ?? "未知"
-            record("QX 颜色描述文件已修正：\(old) → HDR V4")
-        } catch {
-            colorProfileStatus = error.localizedDescription
-            status = colorProfileStatus
-            record(status)
-        }
+            displays = try await runHelper(["list"]).displays ?? []
+            await loadBrightness()
+        } catch { record("刷新调光方式失败：\(error.localizedDescription)") }
+    }
+    func applyColorProfile(_ mode: DellProfileMode, to models: [DellMonitorModel]) async {
+        guard !busy, !colorProfileBusy else { return }
+        busy = true; colorProfileBusy = true
+        defer { busy = false; colorProfileBusy = false }
+        do {
+            let current = try ColorProfileManager.inspect()
+            let targets = try models.map { model in
+                guard let target = current.first(where: { $0.model == model }) else {
+                    throw ConfigError(message: "未找到 \(model.rawValue)，本次未修改。")
+                }
+                return target
+            }
+            let changes = try ColorProfileManager.prepare(targets, mode: mode)
+            try prepareDisplaySettingsChange(targets)
+            var messages: [String] = []
+            for change in changes {
+                record("颜色描述文件变更前：\(change.model.rawValue) UUID=\(change.uuid) 原文件=\(change.before?.path ?? "未读取") 目标=\(change.target.path)")
+                do {
+                    try await ColorProfileManager.apply(change)
+                    messages.append("\(change.model.rawValue)：已确认 \(mode.rawValue)")
+                } catch { messages.append("\(change.model.rawValue)：\(error.localizedDescription)") }
+            }
+            colorProfileStatus = messages.joined(separator: "；")
+        } catch { colorProfileStatus = error.localizedDescription }
+        status = colorProfileStatus; record(status)
+        await reloadAfterDisplaySettingsChange()
+    }
+    func setHDR(_ enabled: Bool, for target: ColorDisplayState) async {
+        guard !busy, !colorProfileBusy else { return }
+        busy = true; colorProfileBusy = true
+        defer { busy = false; colorProfileBusy = false }
+        do {
+            let id = try ColorProfileManager.displayID(forUUID: target.uuid)
+            let state = HDRController.inspect(id)
+            guard state.canSet else { throw ConfigError(message: state.label + "；暂时无法切换。") }
+            record("HDR 变更前：\(target.model.rawValue) UUID=\(target.uuid) 原状态=\(state.label) 目标=\(enabled ? "开启" : "关闭")")
+            try prepareDisplaySettingsChange([target])
+            try await HDRController.set(enabled, uuid: target.uuid)
+            colorProfileStatus = "\(target.model.rawValue)：已确认 HDR \(enabled ? "开启" : "关闭")"
+        } catch { colorProfileStatus = error.localizedDescription }
+        status = colorProfileStatus; record(status)
+        await reloadAfterDisplaySettingsChange()
     }
     func brightnessKeyTargets() -> [String] {
         if config.menuBrightnessLinked { return config.monitors.map(\.serial) }
@@ -569,35 +604,27 @@ struct SwitchView: View {
                     BrightnessPage(model: model, software: model.softwareDimming)
                 }.tabItem { Label("亮度", systemImage: "sun.max") }
                 ShortcutSettings(model: model).tabItem { Label("状态栏", systemImage: "slider.horizontal.3") }
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("按显示器序列号识别，两端可共用同一份 JSON 配置。")
-                    ForEach(model.config.monitors.indices, id: \.self) { i in
-                        HStack {
-                            TextField("名称", text: $model.config.monitors[i].name).frame(width: 80)
-                            Text(model.config.monitors[i].serial).textSelection(.enabled)
-                            Spacer()
-                            Text(model.readings[model.config.monitors[i].serial].map(sourceName) ?? "不可见 / 未读取")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("按显示器序列号识别，两端可共用同一份 JSON 配置。")
+                        ForEach(model.config.monitors.indices, id: \.self) { i in
+                            HStack {
+                                TextField("名称", text: $model.config.monitors[i].name).frame(width: 80)
+                                Text(model.config.monitors[i].serial).textSelection(.enabled)
+                                Spacer()
+                                Text(model.readings[model.config.monitors[i].serial].map(sourceName) ?? "不可见 / 未读取")
+                            }
+                            InputSwitchControl(model: model, serial: model.config.monitors[i].serial, name: model.config.monitors[i].name)
                         }
-                        InputSwitchControl(model: model, serial: model.config.monitors[i].serial, name: model.config.monitors[i].name)
-                    }
-                    Divider()
-                    Text("颜色描述文件").font(.headline)
-                    Text(model.colorProfileStatus)
-                        .font(.callout).textSelection(.enabled)
-                    HStack {
-                        Button("重新检查") { model.refreshColorProfiles() }
-                        Button("一键修正 QX") { model.repairQXColorProfile() }
-                            .disabled(model.blocksInteraction || model.colorProfileBusy || !model.colorProfileCanRepair)
-                    }
-                    Text("QX 从 DP 切换到 USB-C 出现黑屏时，可将 QX 设置为 Dell 的 HDR V4 描述文件。此功能仅修改 macOS 的颜色描述文件，不修改显示器固件。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Divider()
-                    Text("已检测到") .font(.headline)
-                    ForEach(model.displays) { d in Text("\(d.name) · \(d.serial.isEmpty ? "无序列号" : d.serial)").textSelection(.enabled) }
-                    Text("更换显示器或自定义序列号：导出 JSON，修改 monitors、groups 中的 serial，再导入。")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }.padding().tabItem { Label("显示器", systemImage: "display.2") }
+                        Divider()
+                        DisplayColorSettings(model: model)
+                        Divider()
+                        Text("已检测到") .font(.headline)
+                        ForEach(model.displays) { d in Text("\(d.name) · \(d.serial.isEmpty ? "无序列号" : d.serial)").textSelection(.enabled) }
+                        Text("更换显示器或自定义序列号：导出 JSON，修改 monitors、groups 中的 serial，再导入。")
+                            .foregroundStyle(.secondary)
+                    }.padding()
+                }.tabItem { Label("显示器", systemImage: "display.2") }
                 VStack(alignment: .leading) {
                     Text("DDC 回读确认输入源；画面是否正常需实际观察。")
                     ScrollView { Text(model.log).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }

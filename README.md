@@ -20,14 +20,24 @@ macOS 应用、Windows 程序和托盘使用统一的双显示器切换图标。
 - “设置与日志 → 通用 → 开机启动”控制登录后自动运行，开关立即生效，首次安装默认关闭。此选项仅作用于当前电脑，不随 JSON 配置导入导出。macOS 使用系统登录项 API，如需批准会提供系统设置入口；Windows 注册当前用户的启动项，可在系统“启动应用”中管理。Mac 请放在“应用程序”文件夹，Windows 请保存在固定位置；程序移动后须重新设置开机启动。
 - 全局快捷键：macOS `Control + Option + Command + 数字`；Windows `Ctrl + Alt + Shift + 数字`。组内设置数字 1–9，0 关闭该组快捷键。保存配置后注册，注册冲突会在设置中显示。
 - “检测 / 读取”只读取显示器列表、视频输入和当前亮度。日志区分 DDC 回读确认、请求已发送但回读不可用、输入不匹配及逐屏错误。DDC 回读不证明画面已点亮。
-- macOS “显示器”页会读取 QX/QE 当前颜色描述文件；QX 不是 HDR V4 时，可点击“一键修正 QX”切换到 Dell DDPM 中的 `Dell_U2723QX_HDR_v4_MHC2.icm`。该操作只修改 macOS ColorSync 绑定，不修改显示器固件；需要先安装 Dell DDPM 的颜色描述文件。
+- macOS “显示器 → 颜色与 HDR”支持每屏选择 **HDR V4 / Native V2**，点击“应用到此屏”生效；也可选择模式后“一键同步到两台显示器”。同步按 QX / QE 各自型号选取文件，不要求两屏共用同一路径。每屏另有独立 **HDR 开关**，与颜色描述文件分别控制。
 - 开启显示器的 DDC/CI。其他显示器控制工具可能争用通道；本程序不会自行退出它们。
+
+### 颜色描述文件与 HDR（macOS v2.15）
+
+两种描述文件从已安装的 Dell DDPM 或用户 / 系统 ColorSync Profiles 目录发现，不在安装包中重新分发。对应文件为 `Dell_U2723QX_HDR_v4_MHC2.icm` / `Dell_U2723QX_Native_v2.icm`，QE 使用文件名中的 `U2723QE`。界面显示实际文件名，悬停可查看完整路径；Dell 文件内部描述名称相同，不能据此判断型号或模式。缺少文件时禁用对应应用操作。
+
+同步会先检查两台屏幕的唯一匹配、UUID、目标文件及 ICC 有效性，任一检查失败则整组不修改。提交后逐屏回读 ColorSync 路径确认；执行过程中断线仍可能部分完成，界面和日志会分别报告结果。改动前记录原文件完整路径与 UUID，不自动回滚用户已成功应用的选择。切换颜色或 HDR 前撤销目标屏幕的本工具软件调暗，避免继续使用旧 Gamma 表；操作完成后重新读取 HDR 与调光方式。选择和开关仅由明确操作生效，启动和重新检查不写入。
+
+HDR V4 是颜色描述文件类型，**不等于开启 HDR**。HDR 开关动态加载 SkyLight 的 `SLSDisplaySupportsHDRMode`、`SLSDisplayIsHDRModeEnabled` 与 `SLSDisplaySetHDRModeEnabled`，签名参考 [AllRez AppleMisc.h](https://github.com/joevt/AllRez/blob/main/AllRez/AppleMisc.h)。不支持或接口缺失时禁用开关并显示原因，可打开系统显示器设置；支持时提交后等待实际状态回读。该私有接口可能随 macOS 更新变化。若当前连接不提供 HDR，请检查显示器 OSD 的 Smart HDR 设置、连接方式及系统设置；工具不会绕过硬件能力限制。
+
+本机双屏已验证 HDR V4 / Native V2 的写入和回读，以及原路径恢复。2026-11-02 测试时系统的逐屏 HDR 能力查询均为 false，EDR 当前值与潜在值均为 1；已验证拒绝不支持的 HDR 操作，尚未在支持状态下实测 HDR 开关。
 
 ### 亮度调节
 
 “设置与日志 → 亮度”下提供三个二级页签，默认选择 **自动 · 检测 HDR**。支持每屏独立和所有显示器联动。拖动松手后应用，或调整后点击“应用”。
 
-- **自动 · 检测 HDR**：逐屏读取当前 HDR 是否开启；开启时使用软件调暗，关闭时使用硬件 DDC，无法确认时使用软件调暗。混合 HDR/SDR 双屏分别选择方式，每屏显示实际路径。显示配置改变、读取和每次调节时重新检测，不会自动关闭 HDR，也不会因检测到 HDR 变化自动写入背光。macOS 使用与 MonitorControl 相同的私有 `CGSIsHDREnabled` 查询，系统升级可能影响可用性；Windows 使用活动显示路径的 Advanced Color 查询，新接口区分 SDR/WCG/HDR，旧接口遇到无法区分的 WCG 状态则视为未知。保留手动软件和硬件选项。
+- **自动 · 检测 HDR**：逐屏读取当前 HDR 是否开启；开启时使用软件调暗，关闭时使用硬件 DDC，无法确认时使用软件调暗。混合 HDR/SDR 双屏分别选择方式，每屏显示实际路径。显示配置改变、读取和每次调节时重新检测，不会自动关闭 HDR，也不会因检测到 HDR 变化自动写入背光。macOS v2.15 改用私有 `SLSDisplayIsHDRModeEnabled` 逐屏查询：旧的 `CGSIsHDREnabled` 在本机曾始终返回 true，与当前 HDR 能力和 EDR 读数不符。系统升级可能影响接口可用性；Windows 使用活动显示路径的 Advanced Color 查询，新接口区分 SDR/WCG/HDR，旧接口遇到无法区分的 WCG 状态则视为未知。保留手动软件和硬件选项。
 
 - **软件调暗 · HDR**：移植 MonitorControl 的 Gamma 表调暗路径，并保留其系统遮罩作为 HDR/Gamma 不可用时的回退。Gamma 路径保存并恢复原始三色通道表，调暗时切换 Gamma 活动维持窗口；HDR 状态保持不变。100% 表示撤掉本工具的调暗效果，最低 10%，避免全黑。支持一键恢复，切换到硬件页、导入配置或退出时恢复 Gamma 并撤掉遮罩。每次启动从 100% 开始，不自动恢复上次调暗值。只记住本机选择的调光方式，不写入共享组别 JSON。
 - **硬件调光 · SDR**：通过 DDC/CI VCP `0x10` 调节背光，按显示器返回的最大值换算为 0–100%。发送后回读寄存器；**这两台 Dell 在 HDR 开启时出现寄存器变化、实际画面不变，已由使用者确认**。因此 HDR 下请使用软件页。工具不会自动关闭 HDR，也不在启动时写入背光。
@@ -82,9 +92,17 @@ dotnet publish Windows/DisplayInputSwitch.csproj -c Release -r win-x64 --self-co
 
 也可在 macOS 交叉构建 Windows 版本：`DOTNET_BIN=/path/to/dotnet zsh build-windows.sh`。输出 `build/windows-x64/DisplayInputSwitch.exe`。构建产物、本地 SDK、日志和 IDE 生成目录不入 Git。
 
+发布脚本需要 Python 3.11+，默认输出到 `/Volumes/sata11-185XXXX1365/工具`，不再输出到桌面。磁盘必须已挂载；新 ZIP 完整性校验通过并替换成功后，才清理该目录中本工具同平台的更低版本 ZIP，不删除其他软件、另一平台或更高版本的包。两个平台版本号独立，目前此颜色 / HDR 功能仅在 macOS 提供。
+
+```sh
+# 完成对应平台构建后发布（macos / windows / all）：
+python3 scripts/release.py macos
+# 可通过 --output 或 DISPLAYINPUTSWITCH_RELEASE_DIR 临时指定其他已存在的目录。
+```
+
 图标源文件为 [Assets/AppIcon.svg](Assets/AppIcon.svg)，`.icns`、`.ico` 和预览 PNG 已随源码提供。修改后可在 macOS 上运行 `python3 scripts/build-icons.py` 重新生成，需要系统自带的 `sips`、`iconutil` 与 ImageMagick；普通应用构建直接使用现有图标文件。
 
-已验证：Swift / .NET 配置校验与往返序列化、旧配置迁移、亮度范围和比例换算、无效控制计划拒绝、DDC 报文及响应校验、EDID 序列号解析、Windows 启动命令路径引用、快捷键冲突与旧配置迁移、亮度步长边界、HDR 路由、Win32 结构布局、macOS 应用编译和 Windows x64 发布。当前两台 Dell 的 macOS DDC 寄存器读写和回读已验证，但 HDR 下物理亮度不变。软件遮罩已用双屏白色测试窗口和屏幕像素采样验证实际变暗及 100% 恢复；单屏、联动、缺失目标整组拒绝已验证。Mac 亮度浮层已验证目标变化、窗口复用、鼠标穿透、不抢焦点与自动消失；亮度键事件解析及模拟按下/松开通过测试。连续 12 次调暗从双屏 100% 到 40%，30 次界面采样中滑块未禁用、布局保持固定。应用本身尚未获辅助功能权限，实体顶部亮度键待授权后确认。Mac 两屏当前 HDR 状态已读到开启并选择软件调暗；录制、Esc 取消和保存快捷键、Finder 前台时全局调亮/调暗/恢复、单屏快捷键、菜单栏一条/两条滑块均已验证；ColorSync 读取与 QX HDR V4 修正已在本机双屏上验证。
+已验证：Swift / .NET 配置校验与往返序列化、旧配置迁移、亮度范围和比例换算、无效控制计划拒绝、DDC 报文及响应校验、EDID 序列号解析、Windows 启动命令路径引用、快捷键冲突与旧配置迁移、亮度步长边界、HDR 路由、Win32 结构布局、macOS 应用编译和 Windows x64 发布。当前两台 Dell 的 macOS DDC 寄存器读写和回读已验证，但 HDR 下物理亮度不变。软件遮罩已用双屏白色测试窗口和屏幕像素采样验证实际变暗及 100% 恢复；单屏、联动、缺失目标整组拒绝已验证。Mac 亮度浮层已验证目标变化、窗口复用、鼠标穿透、不抢焦点与自动消失；亮度键事件解析及模拟按下/松开通过测试。连续 12 次调暗从双屏 100% 到 40%，30 次界面采样中滑块未禁用、布局保持固定。应用本身尚未获辅助功能权限，实体顶部亮度键待授权后确认。旧版 Mac HDR 查询曾报告两屏开启（v2.15 已发现该查询在本机误报，并改用逐屏接口）；录制、Esc 取消和保存快捷键、Finder 前台时全局调亮/调暗/恢复、单屏快捷键、菜单栏一条/两条滑块均已验证；ColorSync 读取与 QX HDR V4 修正已在本机双屏上验证。
 
 未验证：Windows GUI / DXVA2 / 软件遮罩实机、HDR 视频和独占全屏、此次新版完整双屏输入源切换。原先切换后黑屏且 OSD 不显示的问题，在显示器恢复出厂设置后已由使用者确认消失。开机启动已验证系统注册状态，未重启或注销测试。
 
@@ -139,4 +157,11 @@ build/native-brightness-hud-check
 ```sh
 xcrun swiftc -parse-as-library Sources/Configuration.swift Sources/SoftwareDimming.swift Sources/BrightnessHUD.swift Sources/BrightnessKeys.swift Tests/BrightnessFeedback/main.swift -o build/brightness-feedback-check
 build/brightness-feedback-check
+```
+
+可选颜色 / HDR 实机测试（会短暂切换两屏描述文件并恢复原路径；若当前支持 HDR，也会切换并恢复 HDR）：
+
+```sh
+# test.sh 已编译该检查；不加 --hardware 仅做只读和临时文件检查。
+build/display-settings-check --hardware
 ```

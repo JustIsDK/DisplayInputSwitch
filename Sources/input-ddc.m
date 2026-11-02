@@ -117,7 +117,7 @@ int main(int argc,const char *argv[]) {
     }
     DisplayInfos displays[MAX_DISPLAYS]={}; int count=getOnlineDisplayInfos(displays);
     NSMutableArray *items=[NSMutableArray array];
-    bool (*isHDREnabled)(CGDirectDisplayID)=dlsym(RTLD_DEFAULT,"CGSIsHDREnabled");
+    bool (*isHDREnabled)(CGDirectDisplayID)=dlsym(RTLD_DEFAULT,"SLSDisplayIsHDRModeEnabled");
     for(int i=0;i<count;i++) if(!CGDisplayIsBuiltin(displays[i].id) && displays[i].uuid) {
         NSMutableDictionary *item=[@{@"id":displays[i].uuid,@"name":displays[i].productName?:@"外接显示器",@"serial":displays[i].alphNumSerial?:@""} mutableCopy];
         if(isHDREnabled) item[@"hdr"]=isHDREnabled(displays[i].id) ? @YES : @NO;

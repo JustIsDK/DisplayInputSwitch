@@ -6,3 +6,4 @@ Windows/obj/
 *.log
 Tests/WindowsCore/bin/
 Tests/WindowsCore/obj/
+__pycache__/

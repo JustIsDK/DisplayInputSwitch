@@ -2,112 +2,128 @@ import AppKit
 import ColorSync
 import Foundation
 
-struct ColorProfileReport: Equatable {
-    let qxPath: URL?
-    let qePath: URL?
-    let targetPath: URL?
-    let qxNeedsRepair: Bool
-
-    var targetAvailable: Bool { targetPath != nil }
-
-    var summary: String {
-        let qx = Self.label(qxPath)
-        let qe = Self.label(qePath)
-        let target = targetPath.map { $0.lastPathComponent } ?? "未找到 QX HDR V4 文件"
-        let state = qxNeedsRepair ? "QX 不是目标配置，可一键修正" : "QX 已是目标配置"
-        return "QX：\(qx)\nQE：\(qe)\n目标：\(target)\n\(state)"
+enum DellProfileMode: String, CaseIterable, Identifiable {
+    case hdrV4 = "HDR V4"
+    case nativeV2 = "Native V2"
+    var id: String { rawValue }
+    func filename(for model: DellMonitorModel) -> String {
+        "Dell_\(model.rawValue)_\(self == .hdrV4 ? "HDR_v4_MHC2" : "Native_v2").icm"
     }
-
-    static func label(_ url: URL?) -> String {
-        guard let url else { return "未读取" }
-        let name = url.deletingPathExtension().lastPathComponent
-        if name.contains("HDR_v4") { return "HDR V4（\(url.lastPathComponent)）" }
-        if name.contains("Native_v2") { return "Native V2（\(url.lastPathComponent)）" }
-        if name.contains("DCIP3") { return "DCI-P3（\(url.lastPathComponent)）" }
-        if name.contains("sRGB") { return "sRGB（\(url.lastPathComponent)）" }
-        return url.lastPathComponent
+    static func detect(_ url: URL?) -> Self? {
+        guard let name = url?.lastPathComponent.lowercased() else { return nil }
+        if name.contains("hdr_v4") { return .hdrV4 }
+        if name.contains("native_v2") { return .nativeV2 }
+        return nil
     }
 }
 
-enum ColorProfileManager {
-    private static let qxToken = "U2723QX"
-    private static let qeToken = "U2723QE"
-    private static let targetFile = "Dell_U2723QX_HDR_v4_MHC2.icm"
+enum DellMonitorModel: String, CaseIterable, Identifiable {
+    case qx = "U2723QX", qe = "U2723QE"
+    var id: String { rawValue }
+}
 
-    static func inspect() throws -> ColorProfileReport {
-        let qx = try screen(named: qxToken)
-        let qxPath = try currentProfileURL(for: qx)
-        let qePath: URL?
-        if let qe = try optionalScreen(named: qeToken) { qePath = try currentProfileURL(for: qe) } else { qePath = nil }
-        let target = targetURL()
-        return ColorProfileReport(qxPath: qxPath, qePath: qePath, targetPath: target,
-                                 qxNeedsRepair: target.map { qxPath?.standardizedFileURL != $0.standardizedFileURL } ?? true)
+struct ColorDisplayState: Identifiable, Equatable {
+    let model: DellMonitorModel
+    let uuid: String
+    let profileURL: URL?
+    let availableModes: [DellProfileMode]
+    let hdr: HDRState
+    var id: DellMonitorModel { model }
+    var mode: DellProfileMode? { DellProfileMode.detect(profileURL) }
+    var profileLabel: String {
+        guard let profileURL else { return "无法读取当前描述文件" }
+        return "\(mode?.rawValue ?? "其他") · \(profileURL.lastPathComponent)"
+    }
+}
+
+@MainActor enum ColorProfileManager {
+    static func inspect() throws -> [ColorDisplayState] {
+        try DellMonitorModel.allCases.compactMap { model in
+            guard let screen = try screen(for: model) else { return nil }
+            let id = try displayID(screen)
+            return ColorDisplayState(model: model, uuid: try uuid(id), profileURL: currentProfileURL(id),
+                                     availableModes: DellProfileMode.allCases.filter { targetURL(model: model, mode: $0) != nil },
+                                     hdr: HDRController.inspect(id))
+        }
     }
 
-    @discardableResult
-    static func repairQX() throws -> ColorProfileReport {
-        let qx = try screen(named: qxToken)
-        guard let target = targetURL() else {
-            throw ConfigError(message: "未找到 QX HDR V4 描述文件。请先安装 Dell Display Manager / DDPM 的显示器颜色配置文件。")
-        }
-        guard ColorSyncProfileCreateWithURL(target as CFURL, nil)?.takeRetainedValue() != nil,
-              let uuid = displayUUID(for: qx) else {
-            throw ConfigError(message: "QX 颜色描述文件或显示器标识无效，未修改。")
-        }
-        let settings = [kColorSyncDeviceDefaultProfileID!.takeUnretainedValue() as String: target as CFURL] as CFDictionary
-        guard ColorSyncDeviceSetCustomProfiles(kColorSyncDisplayDeviceClass!.takeUnretainedValue(), uuid, settings) else {
-            throw ConfigError(message: "系统未接受 QX 颜色描述文件变更。")
-        }
-        return try inspect()
+    static func targetURL(model: DellMonitorModel, mode: DellProfileMode, roots: [URL]? = nil) -> URL? {
+        let fm = FileManager.default, home = fm.homeDirectoryForCurrentUser
+        let directories = roots ?? [
+            home.appendingPathComponent("Applications/DDPM/Profiles/\(model.rawValue)"),
+            URL(fileURLWithPath: "/Applications/DDPM/Profiles/\(model.rawValue)"),
+            home.appendingPathComponent("Library/ColorSync/Profiles"),
+            URL(fileURLWithPath: "/Library/ColorSync/Profiles")
+        ]
+        return directories.map { $0.appendingPathComponent(mode.filename(for: model)) }.first { fm.isReadableFile(atPath: $0.path) }
     }
 
-    private static func screen(named token: String) throws -> NSScreen {
-        let screens = NSScreen.screens.filter { $0.localizedName.localizedCaseInsensitiveContains(token) }
-        guard screens.count <= 1 else {
-            throw ConfigError(message: "未找到唯一的 \(token) 显示器（当前匹配 \(screens.count) 台）。")
-        }
-        guard let screen = screens.first else {
-            if token == qxToken { throw ConfigError(message: "未找到 QX 显示器。") }
-            throw ConfigError(message: "未找到 \(token) 显示器。")
-        }
-        return screen
+    struct Change {
+        let model: DellMonitorModel
+        let uuid: String
+        let before: URL?
+        let target: URL
     }
 
-    private static func optionalScreen(named token: String) throws -> NSScreen? {
-        let screens = NSScreen.screens.filter { $0.localizedName.localizedCaseInsensitiveContains(token) }
-        guard screens.count <= 1 else {
-            throw ConfigError(message: "\(token) 显示器匹配不唯一（当前匹配 \(screens.count) 台）。")
+    // Preflight every screen and file before the first write; a hardware disconnect can still cause partial completion.
+    static func prepare(_ targets: [ColorDisplayState], mode: DellProfileMode, roots: [URL]? = nil) throws -> [Change] {
+        guard !targets.isEmpty, Set(targets.map(\.id)).count == targets.count else {
+            throw ConfigError(message: "颜色描述文件操作的目标为空或重复。")
         }
-        return screens.first
+        return try targets.map { state in
+            let id = try displayID(forUUID: state.uuid)
+            guard let target = targetURL(model: state.model, mode: mode, roots: roots),
+                  ColorSyncProfileCreateWithURL(target as CFURL, nil)?.takeRetainedValue() != nil else {
+                throw ConfigError(message: "未找到有效的 \(state.model.rawValue) \(mode.rawValue) 文件；本次未修改。请安装 Dell DDPM 的颜色描述文件。")
+            }
+            return Change(model: state.model, uuid: state.uuid, before: currentProfileURL(id), target: target)
+        }
     }
 
-    private static func displayID(for screen: NSScreen) throws -> CGDirectDisplayID {
+    static func apply(_ change: Change) async throws {
+        _ = try displayID(forUUID: change.uuid)
+        guard let deviceUUID = CFUUIDCreateFromString(nil, change.uuid as CFString) else {
+            throw ConfigError(message: "显示器标识无效。")
+        }
+        let settings = [kColorSyncDeviceDefaultProfileID!.takeUnretainedValue() as String: change.target as CFURL] as CFDictionary
+        guard ColorSyncDeviceSetCustomProfiles(kColorSyncDisplayDeviceClass!.takeUnretainedValue(), deviceUUID, settings) else {
+            throw ConfigError(message: "系统未接受颜色描述文件变更。")
+        }
+        for _ in 0..<10 {
+            try await Task.sleep(for: .milliseconds(200))
+            let id = try displayID(forUUID: change.uuid)
+            if currentProfileURL(id)?.standardizedFileURL == change.target.standardizedFileURL { return }
+        }
+        throw ConfigError(message: "描述文件已提交，但回读未匹配；请重新检查。")
+    }
+
+    static func displayID(forUUID expected: String) throws -> CGDirectDisplayID {
+        for screen in NSScreen.screens {
+            let id = try displayID(screen)
+            if try uuid(id) == expected { return id }
+        }
+        throw ConfigError(message: "目标显示器已断开或标识改变，请重新检查。")
+    }
+
+    private static func screen(for model: DellMonitorModel) throws -> NSScreen? {
+        let matches = NSScreen.screens.filter { $0.localizedName.localizedCaseInsensitiveContains(model.rawValue) }
+        guard matches.count <= 1 else { throw ConfigError(message: "\(model.rawValue) 匹配到多台显示器，未操作。") }
+        return matches.first
+    }
+    private static func displayID(_ screen: NSScreen) throws -> CGDirectDisplayID {
         guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
             throw ConfigError(message: "无法读取 \(screen.localizedName) 的显示器标识。")
         }
         return number.uint32Value
     }
-
-    private static func displayUUID(for screen: NSScreen) -> CFUUID? {
-        guard let id = try? displayID(for: screen) else { return nil }
-        return CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue()
+    private static func uuid(_ id: CGDirectDisplayID) throws -> String {
+        guard let value = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else {
+            throw ConfigError(message: "无法读取显示器 UUID。")
+        }
+        return CFUUIDCreateString(nil, value) as String
     }
-
-    private static func currentProfileURL(for screen: NSScreen) throws -> URL? {
-        let id = try displayID(for: screen)
+    private static func currentProfileURL(_ id: CGDirectDisplayID) -> URL? {
         guard let profile = ColorSyncProfileCreateWithDisplayID(id)?.takeRetainedValue() else { return nil }
         return ColorSyncProfileGetURL(profile, nil)?.takeUnretainedValue() as URL?
-    }
-
-    private static func targetURL() -> URL? {
-        let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser
-        let candidates = [
-            home.appendingPathComponent("Applications/DDPM/Profiles/U2723QX/\(targetFile)"),
-            URL(fileURLWithPath: "/Applications/DDPM/Profiles/U2723QX/\(targetFile)"),
-            home.appendingPathComponent("Library/ColorSync/Profiles/\(targetFile)"),
-            URL(fileURLWithPath: "/Library/ColorSync/Profiles/\(targetFile)")
-        ]
-        return candidates.first { fm.fileExists(atPath: $0.path) }
     }
 }
